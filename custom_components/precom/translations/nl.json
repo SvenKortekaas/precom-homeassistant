@@ -1,0 +1,35 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Pre-Com instellen",
+        "description": "Voer je Pre-Com inloggegevens in.",
+        "data": {
+          "username": "Gebruikersnaam (e-mailadres)",
+          "password": "Wachtwoord",
+          "scan_interval": "Verversingsinterval rooster/gebruiker (seconden, standaard 300)",
+          "alarm_scan_interval": "Alarmcheck interval (seconden, standaard 30)"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Ongeldige gebruikersnaam of wachtwoord",
+      "cannot_connect": "Kan geen verbinding maken met Pre-Com",
+      "unknown": "Onverwachte fout"
+    },
+    "abort": {
+      "already_configured": "Dit Pre-Com account is al geconfigureerd"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Pre-Com opties",
+        "data": {
+          "scan_interval": "Verversingsinterval rooster/gebruiker (seconden)",
+          "alarm_scan_interval": "Alarmcheck interval (seconden)"
+        }
+      }
+    }
+  }
+}

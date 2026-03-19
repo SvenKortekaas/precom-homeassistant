@@ -1,0 +1,178 @@
+# =============================================================
+# VOORBEELD AUTOMATIONS — Pre-Com integratie voor Home Assistant
+# =============================================================
+# Beschikbare events:
+#
+#   precom_alarm_received  — wordt gevuurd bij elk nieuw alarmbericht
+#                            Data: alarm_id, text, time, group, type, capcode
+#
+# Beschikbare services:
+#   precom.set_available        — beschikbaar/niet beschikbaar melden
+#   precom.respond_to_alarm     — reageren op een specifiek alarm
+#   precom.set_outside_region   — buiten regio melden
+# =============================================================
+
+
+# 1. Lichten aan bij nieuw alarm (5 minuten)
+- id: precom_alarm_lichten_aan
+  alias: "Pre-Com: Lichten aan bij alarm"
+  mode: restart
+  trigger:
+    - platform: event
+      event_type: precom_alarm_received
+  condition:
+    - condition: template
+      value_template: "{{ trigger.event.data.text | length > 0 }}"
+  action:
+    - service: light.turn_on
+      target:
+        area_id: slaapkamer        # Pas aan naar jouw area_id
+      data:
+        brightness_pct: 100
+        color_temp: 153
+    - delay:
+        minutes: 5
+    - service: light.turn_off
+      target:
+        area_id: slaapkamer
+
+
+# 2. Kritieke pushmelding bij nieuw alarm
+- id: precom_alarm_pushmelding
+  alias: "Pre-Com: Pushmelding bij alarm"
+  mode: queued
+  trigger:
+    - platform: event
+      event_type: precom_alarm_received
+  action:
+    - service: notify.mobile_app_jouw_telefoon    # Pas aan
+      data:
+        title: "🚨 Pre-Com Alarm"
+        message: "{{ trigger.event.data.text }}"
+        data:
+          push:
+            sound:
+              name: default
+              critical: 1
+              volume: 1.0
+          actions:
+            - action: "PRECOM_JA_{{ trigger.event.data.alarm_id }}"
+              title: "✅ Ik ga"
+            - action: "PRECOM_NEE_{{ trigger.event.data.alarm_id }}"
+              title: "❌ Ik ga niet"
+          tag: precom_alarm
+
+
+# 3. Reageer op "Ik ga" knop in de pushmelding
+- id: precom_reactie_ja
+  alias: "Pre-Com: Ik ga — beschikbaar melden"
+  mode: queued
+  trigger:
+    - platform: event
+      event_type: mobile_app_notification_action
+  condition:
+    - condition: template
+      value_template: "{{ trigger.event.data.action.startswith('PRECOM_JA_') }}"
+  action:
+    - variables:
+        alarm_id: "{{ trigger.event.data.action | replace('PRECOM_JA_', '') | int(0) }}"
+    - service: precom.respond_to_alarm
+      data:
+        alarm_id: "{{ alarm_id }}"
+        available: true
+    - service: notify.mobile_app_jouw_telefoon
+      data:
+        message: "✅ Beschikbaarheid doorgegeven aan Pre-Com (alarm #{{ alarm_id }})"
+
+
+# 4. Reageer op "Ik ga niet" knop in de pushmelding
+- id: precom_reactie_nee
+  alias: "Pre-Com: Ik ga niet — niet beschikbaar melden"
+  mode: queued
+  trigger:
+    - platform: event
+      event_type: mobile_app_notification_action
+  condition:
+    - condition: template
+      value_template: "{{ trigger.event.data.action.startswith('PRECOM_NEE_') }}"
+  action:
+    - variables:
+        alarm_id: "{{ trigger.event.data.action | replace('PRECOM_NEE_', '') | int(0) }}"
+    - service: precom.respond_to_alarm
+      data:
+        alarm_id: "{{ alarm_id }}"
+        available: false
+    - service: notify.mobile_app_jouw_telefoon
+      data:
+        message: "❌ Niet beschikbaar doorgegeven (alarm #{{ alarm_id }})"
+
+
+# 5. Beschikbaarheid koppelen aan aanwezigheid thuis
+- id: precom_beschikbaar_aanwezigheid
+  alias: "Pre-Com: Beschikbaarheid op basis van aanwezigheid"
+  mode: queued
+  trigger:
+    - platform: state
+      entity_id: person.jouw_naam    # Pas aan
+  action:
+    - choose:
+        - conditions:
+            - condition: state
+              entity_id: person.jouw_naam
+              state: home
+          sequence:
+            - service: switch.turn_on
+              target:
+                entity_id: switch.pre_com_beschikbaar
+        - conditions:
+            - condition: not
+              conditions:
+                - condition: state
+                  entity_id: person.jouw_naam
+                  state: home
+          sequence:
+            - service: switch.turn_off
+              target:
+                entity_id: switch.pre_com_beschikbaar
+
+
+# 6. Automatisch beschikbaar op werkdagen
+- id: precom_beschikbaar_werkdag
+  alias: "Pre-Com: Beschikbaar op werkdagen"
+  mode: single
+  trigger:
+    - platform: time
+      at: "07:00:00"
+  condition:
+    - condition: time
+      weekday: [mon, tue, wed, thu, fri]
+  action:
+    - service: switch.turn_on
+      target:
+        entity_id: switch.pre_com_beschikbaar
+
+
+# =============================================================
+# LOVELACE DASHBOARD KAART
+# =============================================================
+# Voeg toe aan je dashboard via de UI of YAML:
+#
+# type: entities
+# title: Pre-Com
+# entities:
+#   - entity: switch.pre_com_beschikbaar
+#     name: Ik ben beschikbaar
+#   - entity: number.pre_com_niet_beschikbaar_uren
+#     name: Niet beschikbaar voor (uur)
+#   - entity: sensor.pre_com_laatste_alarm
+#     name: Laatste alarm
+#   - entity: sensor.pre_com_alarm_aantal
+#     name: Aantal alarmen
+#   - entity: binary_sensor.pre_com_alarm_actief
+#     name: Alarm actief
+#   - entity: binary_sensor.pre_com_beschikbaar
+#     name: Beschikbaarheidsstatus
+#   - entity: sensor.pre_com_volgende_dienst
+#     name: Volgende dienst
+#   - entity: button.pre_com_vernieuwen
+#     name: Data vernieuwen

@@ -1,0 +1,35 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up Pre-Com",
+        "description": "Enter your Pre-Com credentials.",
+        "data": {
+          "username": "Username (email address)",
+          "password": "Password",
+          "scan_interval": "Schedule/user info update interval (seconds, default 300)",
+          "alarm_scan_interval": "Alarm check interval (seconds, default 30)"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid username or password",
+      "cannot_connect": "Cannot connect to Pre-Com",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "This Pre-Com account is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Pre-Com options",
+        "data": {
+          "scan_interval": "Schedule/user info update interval (seconds)",
+          "alarm_scan_interval": "Alarm check interval (seconds)"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,48 @@
+set_available:
+  name: Beschikbaarheid instellen
+  description: Stel je beschikbaarheid in bij Pre-Com.
+  fields:
+    available:
+      name: Beschikbaar
+      description: "true = beschikbaar, false = niet beschikbaar"
+      required: true
+      example: true
+      selector:
+        boolean:
+
+respond_to_alarm:
+  name: Reageren op alarm
+  description: Reageer op een Pre-Com alarmbericht met je beschikbaarheid.
+  fields:
+    alarm_id:
+      name: Alarm ID
+      description: Het MsgInID van het alarmbericht (te vinden in de sensor attributen)
+      required: true
+      example: 12345
+      selector:
+        number:
+          min: 1
+          mode: box
+    available:
+      name: Beschikbaar
+      description: "true = ik kom, false = ik kom niet"
+      required: true
+      example: true
+      selector:
+        boolean:
+
+set_outside_region:
+  name: Buiten regio instellen
+  description: Geef aan dat je buiten regio bent voor een bepaald aantal uur.
+  fields:
+    hours:
+      name: Aantal uur
+      description: Hoeveel uur ben je buiten regio?
+      required: true
+      example: 8
+      selector:
+        number:
+          min: 1
+          max: 168
+          unit_of_measurement: uur
+          mode: box
