@@ -1,0 +1,100 @@
+# =============================================================================
+# Pre-Com Integratie — Voorbeeldscripts
+# =============================================================================
+#
+# Deze scripts stellen je in staat om je Pre-Com beschikbaarheidsstatus
+# rechtstreeks vanuit Home Assistant te beheren. Ze zijn speciaal ontworpen
+# om te worden aangeroepen via Apple Opdrachten (Shortcuts) op een iPhone
+# en/of Apple Watch — zo kun je jezelf met één tik aan- of afmelden als
+# beschikbaar piketmedewerker, zonder de Pre-Com app te openen.
+#
+# GEBRUIK MET APPLE OPDRACHTEN
+# ─────────────────────────────
+# Maak in de Opdrachten-app op je iPhone of Apple Watch twee shortcuts aan,
+# elk met de actie "Voer een Home Assistant script uit" (vereist de officiële
+# Home Assistant Companion App):
+#
+#   • Opdracht "Pre-Com AAN"  → roept script.pre_com_beschikbaar_zetten aan
+#   • Opdracht "Pre-Com UIT"  → roept script.pre_com_niet_beschikbaar_rest_dag aan
+#
+# Voeg de opdrachten toe aan je Apple Watch-wijzerplaat of als widget op het
+# beginscherm van je iPhone voor directe toegang. Zo meld je jezelf met één
+# tik aan of af — ideaal bij het begin of einde van een piketperiode.
+#
+# INSTALLATIE
+# ───────────
+# 1. Kopieer de inhoud van dit bestand naar je scripts.yaml, of voeg het toe
+#    als losse include in je configuration.yaml:
+#
+#      script: !include scripts.yaml
+#
+# 2. Pas de entity_id's hieronder aan als jouw Pre-Com integratie andere
+#    namen gebruikt. Controleer dit via Instellingen → Apparaten & Services.
+#
+# 3. Herlaad je scripts via Instellingen → Server controls → Scripts herladen,
+#    of herstart Home Assistant volledig.
+#
+# VEREISTEN
+# ─────────
+# • Pre-Com integratie geïnstalleerd en geconfigureerd via HACS
+# • Entiteiten aanwezig:
+#     - switch.pre_com_beschikbaar
+#     - number.pre_com_niet_beschikbaar_uren
+# • Home Assistant Companion App op iPhone/Apple Watch (voor Opdrachten-koppeling)
+#
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# Script 1: Zet jezelf op BESCHIKBAAR
+# -----------------------------------------------------------------------------
+# Gebruik dit script om jezelf aan te melden als beschikbaar piketmedewerker.
+# De Pre-Com schakelaar wordt ingeschakeld en je status is direct actief.
+# -----------------------------------------------------------------------------
+
+pre_com_beschikbaar_zetten:
+  alias: "Pre-Com: Beschikbaar zetten"
+  description: "Zet de Pre-Com beschikbaarheid op AAN"
+  icon: mdi:account-check
+  mode: single
+  sequence:
+    - action: switch.turn_on
+      target:
+        entity_id: switch.pre_com_beschikbaar  # Pas aan indien nodig
+
+
+# -----------------------------------------------------------------------------
+# Script 2: Zet jezelf op NIET BESCHIKBAAR voor de rest van de dag
+# -----------------------------------------------------------------------------
+# Gebruik dit script om jezelf af te melden voor de rest van de huidige dag.
+# Het script berekent automatisch hoeveel uren er nog resten tot 23:59 uur
+# en schrijft deze waarde naar de Pre-Com "niet beschikbaar uren" entiteit,
+# waarna de beschikbaarheidsschakelaar wordt uitgeschakeld.
+#
+# Voorbeeld: aanroep om 14:30 → stelt 9,5 uur niet-beschikbaar in.
+# -----------------------------------------------------------------------------
+
+pre_com_niet_beschikbaar_rest_dag:
+  alias: "Pre-Com: Niet beschikbaar rest van de dag"
+  description: >
+    Berekent de resterende uren tot middernacht en zet Pre-Com op niet beschikbaar.
+  icon: mdi:account-remove
+  mode: single
+  sequence:
+
+    # Stap 1: Bereken het aantal resterende uren tot 23:59 vandaag
+    - variables:
+        uren_resterend: >
+          {{ ((today_at('23:59:00') - now()).total_seconds() / 3600) | round(1) }}
+
+    # Stap 2: Stel het aantal niet-beschikbare uren in bij de integratie
+    - action: number.set_value
+      target:
+        entity_id: number.pre_com_niet_beschikbaar_uren  # Pas aan indien nodig
+      data:
+        value: "{{ uren_resterend }}"
+
+    # Stap 3: Zet de beschikbaarheidsschakelaar uit
+    - action: switch.turn_off
+      target:
+        entity_id: switch.pre_com_beschikbaar  # Pas aan indien nodig
