@@ -16,6 +16,7 @@ from .const import (
     DATA_USER_INFO,
     DEFAULT_ALARM_SCAN_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_SCHEDULE_SCAN_INTERVAL,
     DOMAIN,
     EVENT_ALARM_RECEIVED,
 )
@@ -37,6 +38,7 @@ class PreComCoordinator(DataUpdateCoordinator):
         client: PreComClient,
         scan_interval: int = DEFAULT_SCAN_INTERVAL,
         alarm_scan_interval: int = DEFAULT_ALARM_SCAN_INTERVAL,
+        schedule_scan_interval: int = DEFAULT_SCHEDULE_SCAN_INTERVAL,
     ) -> None:
         """Initialiseer de coordinator."""
         super().__init__(
@@ -47,7 +49,10 @@ class PreComCoordinator(DataUpdateCoordinator):
         )
         self.client = client
         self._alarm_scan_interval = alarm_scan_interval
+        self._schedule_scan_interval = schedule_scan_interval
         self._last_alarm_id: int | None = None
+        self._last_schedule_update: datetime | None = None
+        self._first_update = True
         self.user_id: int | None = None
         # Lokale beschikbaarheidsoverride: (available: bool, until: datetime | None)
         self.availability_override: tuple[bool, datetime | None] | None = None
@@ -75,7 +80,20 @@ class PreComCoordinator(DataUpdateCoordinator):
             alarm_messages = await self.client.get_alarm_messages()
             await self._check_new_alarms(alarm_messages)
 
-            schedule = await self.client.get_user_schedule()
+            # Update schedule only if enough time has passed or it's the first update
+            now = datetime.now()
+            schedule = self.data.get(DATA_SCHEDULE, []) if self.data else []
+            if (
+                self._first_update
+                or self._last_schedule_update is None
+                or (now - self._last_schedule_update).total_seconds() >= self._schedule_scan_interval
+            ):
+                schedule = await self.client.get_user_schedule()
+                self._last_schedule_update = now
+                _LOGGER.debug("Rooster bijgewerkt")
+
+            if self._first_update:
+                self._first_update = False
 
             # Verwijder een verlopen override automatisch
             if self.availability_override is not None:

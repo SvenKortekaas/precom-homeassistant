@@ -14,8 +14,10 @@ from .api import PreComApiError, PreComAuthError, PreComClient
 from .const import (
     CONF_ALARM_SCAN_INTERVAL,
     CONF_SCAN_INTERVAL,
+    CONF_SCHEDULE_SCAN_INTERVAL,
     DEFAULT_ALARM_SCAN_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_SCHEDULE_SCAN_INTERVAL,
     DOMAIN,
 )
 
@@ -25,10 +27,13 @@ SCHEMA_GEBRUIKER = vol.Schema({
     vol.Required(CONF_USERNAME): str,
     vol.Required(CONF_PASSWORD): str,
     vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): vol.All(
-        vol.Coerce(int), vol.Range(min=60, max=3600)
+        vol.Coerce(int), vol.Range(min=10, max=3600)
     ),
     vol.Optional(CONF_ALARM_SCAN_INTERVAL, default=DEFAULT_ALARM_SCAN_INTERVAL): vol.All(
         vol.Coerce(int), vol.Range(min=15, max=300)
+    ),
+    vol.Optional(CONF_SCHEDULE_SCAN_INTERVAL, default=DEFAULT_SCHEDULE_SCAN_INTERVAL): vol.All(
+        vol.Coerce(int), vol.Range(min=60, max=3600)
     ),
 })
 
