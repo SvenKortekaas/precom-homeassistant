@@ -14,8 +14,10 @@ from .api import PreComClient
 from .const import (
     CONF_ALARM_SCAN_INTERVAL,
     CONF_SCAN_INTERVAL,
+    CONF_SCHEDULE_SCAN_INTERVAL,
     DEFAULT_ALARM_SCAN_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_SCHEDULE_SCAN_INTERVAL,
     DOMAIN,
 )
 from .coordinator import PreComCoordinator
@@ -59,6 +61,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         CONF_ALARM_SCAN_INTERVAL,
         entry.data.get(CONF_ALARM_SCAN_INTERVAL, DEFAULT_ALARM_SCAN_INTERVAL),
     )
+    schedule_scan_interval = entry.options.get(
+        CONF_SCHEDULE_SCAN_INTERVAL,
+        entry.data.get(CONF_SCHEDULE_SCAN_INTERVAL, DEFAULT_SCHEDULE_SCAN_INTERVAL),
+    )
 
     session = async_get_clientsession(hass)
     client  = PreComClient(session, username, password)
@@ -68,6 +74,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass, client,
         scan_interval=scan_interval,
         alarm_scan_interval=alarm_scan_interval,
+        schedule_scan_interval=schedule_scan_interval,
     )
     await coordinator.async_config_entry_first_refresh()
     await coordinator.async_start_alarm_coordinator()
