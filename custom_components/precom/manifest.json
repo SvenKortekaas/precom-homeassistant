@@ -1,7 +1,9 @@
 {
   "domain": "precom",
   "name": "Pre-Com",
-  "version": "2.1.0",
+<<<<<<< HEAD
+  "version": "2.1.1",
+>>>>>>> 1b60e72 (Version 2.1.1: Improved availability responsiveness)
   "config_flow": true,
   "documentation": "https://github.com/svenkortekaas/precom-homeassistant",
   "issue_tracker": "https://github.com/svenkortekaas/precom-homeassistant/issues",
