@@ -15,7 +15,7 @@ CONF_SCAN_INTERVAL       = "scan_interval"
 CONF_ALARM_SCAN_INTERVAL = "alarm_scan_interval"
 
 # Standaardwaarden
-DEFAULT_SCAN_INTERVAL       = 300  # 5 minuten voor rooster/userinfo
+DEFAULT_SCAN_INTERVAL       = 60   # 60 seconden voor rooster/userinfo
 DEFAULT_ALARM_SCAN_INTERVAL = 30   # 30 seconden voor alarmcheck
 
 # Events
