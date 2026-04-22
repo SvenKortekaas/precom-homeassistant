@@ -1,7 +1,7 @@
 {
   "domain": "precom",
   "name": "Pre-Com",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "config_flow": true,
   "documentation": "https://github.com/svenkortekaas/precom-homeassistant",
   "issue_tracker": "https://github.com/svenkortekaas/precom-homeassistant/issues",

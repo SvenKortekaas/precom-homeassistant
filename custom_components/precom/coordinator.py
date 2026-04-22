@@ -12,6 +12,7 @@ from .api import PreComApiError, PreComAuthError, PreComClient
 from .const import (
     DATA_ALARM_MESSAGES,
     DATA_AVAILABILITY_OVERRIDE,
+    DATA_OVERRIDE_CLEARED_AT,
     DATA_SCHEDULE,
     DATA_USER_INFO,
     DEFAULT_ALARM_SCAN_INTERVAL,
@@ -28,8 +29,14 @@ class PreComCoordinator(DataUpdateCoordinator):
     """
     Coordinator voor Pre-Com data met twee poll-snelheden.
 
-    - Trage poll (standaard 5 min): gebruikersinfo + rooster
-    - Snelle poll (standaard 30 sec): alarmberichten
+    - Hoofd-poll (standaard 15 s): gebruikersinfo + rooster
+    - Snelle poll (standaard 30 s): alarmberichten
+
+    Lokale override:
+      De override overbrugt de poll-latency direct na een HA-schrijfactie
+      (switch on/off). Zodra de server een status retourneert die strijdig
+      is met de override, wordt die direct ingetrokken — de server is altijd
+      de gezaghebbende bron.
     """
 
     def __init__(
@@ -40,7 +47,6 @@ class PreComCoordinator(DataUpdateCoordinator):
         alarm_scan_interval: int = DEFAULT_ALARM_SCAN_INTERVAL,
         schedule_scan_interval: int = DEFAULT_SCHEDULE_SCAN_INTERVAL,
     ) -> None:
-        """Initialiseer de coordinator."""
         super().__init__(
             hass,
             _LOGGER,
@@ -54,10 +60,10 @@ class PreComCoordinator(DataUpdateCoordinator):
         self._last_schedule_update: datetime | None = None
         self._first_update = True
         self.user_id: int | None = None
-        # Lokale beschikbaarheidsoverride: (available: bool, until: datetime | None)
-        self.availability_override: tuple[bool, datetime | None] | None = None
 
-        # Snelle alarm-coordinator
+        self._availability_override: tuple[bool, datetime | None] | None = None
+        self._override_cleared_at: datetime | None = None
+
         self._alarm_coordinator = DataUpdateCoordinator(
             hass,
             _LOGGER,
@@ -65,6 +71,21 @@ class PreComCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(seconds=alarm_scan_interval),
         )
         self._alarm_coordinator._async_update_data = self._async_update_alarms_only
+
+    # ------------------------------------------------------------------
+    # Override property — setter reset cleared_at bij nieuwe override
+    # ------------------------------------------------------------------
+
+    @property
+    def availability_override(self) -> tuple[bool, datetime | None] | None:
+        return self._availability_override
+
+    @availability_override.setter
+    def availability_override(self, value: tuple[bool, datetime | None] | None) -> None:
+        if value is not None:
+            # Nieuwe override gezet → wis eventuele oude "ingetrokken op" tijdstempel
+            self._override_cleared_at = None
+        self._availability_override = value
 
     # ------------------------------------------------------------------
     # Hoofd-update: gebruikersinfo + rooster (traag)
@@ -80,7 +101,6 @@ class PreComCoordinator(DataUpdateCoordinator):
             alarm_messages = await self.client.get_alarm_messages()
             await self._check_new_alarms(alarm_messages)
 
-            # Update schedule only if enough time has passed or it's the first update
             now = datetime.now()
             schedule = self.data.get(DATA_SCHEDULE, []) if self.data else []
             if (
@@ -95,24 +115,75 @@ class PreComCoordinator(DataUpdateCoordinator):
             if self._first_update:
                 self._first_update = False
 
-            # Verwijder een verlopen override automatisch
-            if self.availability_override is not None:
-                _, until = self.availability_override
-                if until is not None and datetime.now() > until:
-                    _LOGGER.debug("Beschikbaarheidsoverride verlopen — API-waarde actief")
-                    self.availability_override = None
+            # ── Override-beheer ────────────────────────────────────────
+            self._update_override(user_info)
 
             return {
                 DATA_USER_INFO: user_info,
                 DATA_ALARM_MESSAGES: alarm_messages,
                 DATA_SCHEDULE: schedule,
-                DATA_AVAILABILITY_OVERRIDE: self.availability_override,
+                DATA_AVAILABILITY_OVERRIDE: self._availability_override,
+                DATA_OVERRIDE_CLEARED_AT: self._override_cleared_at,
             }
 
         except PreComAuthError as err:
             raise UpdateFailed(f"Authenticatiefout: {err}") from err
         except PreComApiError as err:
             raise UpdateFailed(f"API fout: {err}") from err
+
+    def _update_override(self, user_info: dict) -> None:
+        """
+        Vergelijk de lokale override met de server-status en trek de
+        override in als de server een andere richting aangeeft.
+
+        Regels:
+        - Override verlopen (tijdstempel verstreken) → altijd verwijderen.
+        - Override=niet-beschikbaar, server=beschikbaar → server wint
+          (extern beschikbaar gemeld via app/pager).
+        - Override=beschikbaar, server=niet-beschikbaar → server wint
+          (extern niet-beschikbaar gemeld).
+        - Override en server consistent → override handhaven.
+        """
+        # 1. Verlopen override opruimen
+        if self._availability_override is not None:
+            _, until = self._availability_override
+            if until is not None and datetime.now() > until:
+                _LOGGER.debug("Override verlopen — API-waarde actief")
+                self._availability_override = None
+                self._override_cleared_at = datetime.now()
+
+        # 2. Server-truth check
+        if self._availability_override is not None:
+            override_available, until = self._availability_override
+            server_not_available = bool(user_info.get("NotAvailable")) or bool(
+                user_info.get("NotAvailalbeScheduled", user_info.get("NotAvailableScheduled"))
+            )
+
+            if not override_available and not server_not_available:
+                # Override zegt niet-beschikbaar; server zegt beschikbaar → intrekken
+                _LOGGER.debug(
+                    "Override actief (niet-beschikbaar) tot %s, server=beschikbaar → "
+                    "override ingetrokken (extern beschikbaar gemeld via app/pager)",
+                    until.isoformat() if until else "onbeperkt",
+                )
+                self._availability_override = None
+                self._override_cleared_at = datetime.now()
+
+            elif override_available and server_not_available:
+                # Override zegt beschikbaar; server zegt niet-beschikbaar → intrekken
+                _LOGGER.debug(
+                    "Override actief (beschikbaar) tot %s, server=niet-beschikbaar → "
+                    "override ingetrokken",
+                    until.isoformat() if until else "onbeperkt",
+                )
+                self._availability_override = None
+                self._override_cleared_at = datetime.now()
+
+            else:
+                _LOGGER.debug(
+                    "Override actief tot %s, server consistent → override gevolgd",
+                    until.isoformat() if until else "onbeperkt",
+                )
 
     # ------------------------------------------------------------------
     # Snelle alarm-only update

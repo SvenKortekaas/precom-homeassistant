@@ -16,7 +16,13 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DATA_ALARM_MESSAGES, DATA_AVAILABILITY_OVERRIDE, DATA_USER_INFO, DOMAIN
+from .const import (
+    DATA_ALARM_MESSAGES,
+    DATA_AVAILABILITY_OVERRIDE,
+    DATA_OVERRIDE_CLEARED_AT,
+    DATA_USER_INFO,
+    DOMAIN,
+)
 from .coordinator import PreComCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -119,9 +125,10 @@ class PreComAvailabilitySensor(_BaseBinarySensor):
         info = self._user_info()
         attrs: dict[str, Any] = {}
 
-        # Toon de actieve lokale override als die geldig is
         if self.coordinator.data:
             override = self.coordinator.data.get(DATA_AVAILABILITY_OVERRIDE)
+            cleared_at: datetime | None = self.coordinator.data.get(DATA_OVERRIDE_CLEARED_AT)
+
             if override is not None:
                 available, until = override
                 if until is None or datetime.now() <= until:
@@ -131,6 +138,10 @@ class PreComAvailabilitySensor(_BaseBinarySensor):
                         attrs["niet_beschikbaar_tot_leesbaar"] = _format_until(
                             until.isoformat()
                         )
+            else:
+                attrs["bron"] = "server"
+                if cleared_at is not None:
+                    attrs["override_ingetrokken_om"] = cleared_at.isoformat()
 
         # Niet-beschikbaar timestamp uit de API (als die niet de null-datum is)
         timestamp = info.get("NotAvailableTimestamp", "")
