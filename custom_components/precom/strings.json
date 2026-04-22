@@ -27,7 +27,8 @@
         "title": "Pre-Com opties",
         "data": {
           "scan_interval": "Verversingsinterval rooster/gebruiker (seconden)",
-          "alarm_scan_interval": "Alarmcheck interval (seconden)"
+          "alarm_scan_interval": "Alarmcheck interval (seconden)",
+          "debug_logging": "Uitgebreide debug-logging inschakelen"
         }
       }
     }

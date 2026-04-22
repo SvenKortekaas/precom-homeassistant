@@ -13,6 +13,7 @@ import homeassistant.helpers.config_validation as cv
 from .api import PreComClient
 from .const import (
     CONF_ALARM_SCAN_INTERVAL,
+    CONF_DEBUG_LOGGING,
     CONF_SCAN_INTERVAL,
     CONF_SCHEDULE_SCAN_INTERVAL,
     DEFAULT_ALARM_SCAN_INTERVAL,
@@ -65,6 +66,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         CONF_SCHEDULE_SCAN_INTERVAL,
         entry.data.get(CONF_SCHEDULE_SCAN_INTERVAL, DEFAULT_SCHEDULE_SCAN_INTERVAL),
     )
+
+    debug_logging = entry.options.get(
+        CONF_DEBUG_LOGGING,
+        entry.data.get(CONF_DEBUG_LOGGING, True),
+    )
+    if debug_logging:
+        logging.getLogger("custom_components.precom").setLevel(logging.DEBUG)
+    else:
+        logging.getLogger("custom_components.precom").setLevel(logging.INFO)
 
     session = async_get_clientsession(hass)
     client  = PreComClient(session, username, password)

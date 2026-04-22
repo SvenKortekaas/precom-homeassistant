@@ -27,7 +27,8 @@
         "title": "Pre-Com options",
         "data": {
           "scan_interval": "Schedule/user info update interval (seconds)",
-          "alarm_scan_interval": "Alarm check interval (seconds)"
+          "alarm_scan_interval": "Alarm check interval (seconds)",
+          "debug_logging": "Enable verbose debug logging"
         }
       }
     }

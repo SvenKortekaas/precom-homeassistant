@@ -13,6 +13,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .api import PreComApiError, PreComAuthError, PreComClient
 from .const import (
     CONF_ALARM_SCAN_INTERVAL,
+    CONF_DEBUG_LOGGING,
     CONF_SCAN_INTERVAL,
     CONF_SCHEDULE_SCAN_INTERVAL,
     DEFAULT_ALARM_SCAN_INTERVAL,
@@ -116,5 +117,9 @@ class PreComOptionsFlow(config_entries.OptionsFlow):
                     CONF_ALARM_SCAN_INTERVAL,
                     default=_get(CONF_ALARM_SCAN_INTERVAL, DEFAULT_ALARM_SCAN_INTERVAL),
                 ): vol.All(vol.Coerce(int), vol.Range(min=15, max=300)),
+                vol.Optional(
+                    CONF_DEBUG_LOGGING,
+                    default=_get(CONF_DEBUG_LOGGING, True),
+                ): bool,
             }),
         )
