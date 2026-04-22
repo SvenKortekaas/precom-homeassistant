@@ -259,26 +259,25 @@ class PreComClient:
         )
         return True
 
-    async def get_today_appointments(self) -> list[dict]:
+    async def get_active_appointments(self) -> list[dict]:
         """
-        Haal de agenda-afspraken van vandaag op.
+        Haal actieve en toekomstige agenda-afspraken op.
 
-        GET api/v2/SchedulerAppointment/GetUserSchedulerAppointments
-          ?from=YYYY-MM-DD&to=YYYY-MM-DD
-
-        Geeft een lijst van afspraken terug voor vandaag.
+        Haalt een ruimere periode op (gisteren t/m 7 dagen vooruit) zodat
+        blokken die extern zijn ingepland (via de Pre-Com app) of over
+        middernacht lopen ook gevonden worden.
         """
-        today = datetime.now().strftime("%Y-%m-%d")
-        _LOGGER.debug("Pre-Com: agenda ophalen voor %s", today)
+        now = datetime.now()
+        from_date = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+        to_date = (now + timedelta(days=7)).strftime("%Y-%m-%d")
+        _LOGGER.debug("Pre-Com: agenda ophalen van %s t/m %s", from_date, to_date)
         result = await self._request(
             "GET",
             f"{API_V2}/SchedulerAppointment/GetUserSchedulerAppointments",
-            params={"from": today, "to": today},
+            params={"from": from_date, "to": to_date},
         )
         appointments = result if isinstance(result, list) else []
-        _LOGGER.debug(
-            "Pre-Com: %d afspraak/afspraken gevonden voor vandaag", len(appointments)
-        )
+        _LOGGER.debug("Pre-Com: %d afspraak/afspraken gevonden", len(appointments))
         return appointments
 
     def _extract_appointment_times(
@@ -363,16 +362,16 @@ class PreComClient:
         """
         Controleer of een afspraak nu actief is of nog in de toekomst ligt.
 
-        Geeft True als de afspraak vandaag is én eindigt na het huidige moment.
+        Geeft True als de eindtijd van het blok nog niet verstreken is.
+        Blokken die over middernacht lopen (eindtijd < begintijd) krijgen
+        automatisch een dag extra opgeteld.
         """
         now = datetime.now()
-        today = now.strftime("%Y-%m-%d")
-
-        if date_str != today:
-            return False
-
         try:
+            start_dt = datetime.strptime(f"{date_str} {from_str}", "%Y-%m-%d %H:%M")
             end_dt = datetime.strptime(f"{date_str} {to_str}", "%Y-%m-%d %H:%M")
+            if end_dt <= start_dt:
+                end_dt += timedelta(days=1)
             return end_dt > now
         except ValueError:
             return True  # Bij twijfel meenemen
@@ -387,14 +386,14 @@ class PreComClient:
         3. Verwijder elk gevonden blok met de exacte tijden uit de API-response
         4. Fallback: gebruik lokaal opgeslagen tijden als de API geen blokken geeft
         """
-        _LOGGER.info("Pre-Com: beschikbaar melden — agenda ophalen voor tijden")
+        _LOGGER.info("Pre-Com: beschikbaar melden — actieve blokken ophalen")
 
         verwijderd = 0
         api_fout   = False
 
-        # ── Stap 1: ophalen ──────────────────────────────────────────────
+        # ── Stap 1: ophalen (ruimere range zodat extern geplande blokken ook gevonden worden) ──
         try:
-            appointments = await self.get_today_appointments()
+            appointments = await self.get_active_appointments()
         except PreComApiError as err:
             _LOGGER.warning(
                 "Pre-Com: agenda ophalen mislukt (%s) — terugval op lokaal opgeslagen blok",
