@@ -74,12 +74,13 @@ class PreComAvailabilitySwitch(CoordinatorEntity[PreComCoordinator], SwitchEntit
             if until is None or datetime.now() <= until:
                 return available
 
-        # 2. API-waarde
+        # 2. API-waarde: directe vlag én actief roosterblok tellen als niet-beschikbaar
         info = self.coordinator.data.get(DATA_USER_INFO, {})
         not_available = info.get("NotAvailable")
-        if not_available is None:
+        scheduled = info.get("NotAvailalbeScheduled", info.get("NotAvailableScheduled"))
+        if not_available is None and scheduled is None:
             return None
-        return not bool(not_available)
+        return not (bool(not_available) or bool(scheduled))
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Meld beschikbaar — verwijder het agenda-blok en de lokale override."""

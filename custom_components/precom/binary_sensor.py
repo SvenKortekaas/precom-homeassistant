@@ -104,14 +104,15 @@ class PreComAvailabilitySensor(_BaseBinarySensor):
             if until is None or datetime.now() <= until:
                 return available
 
-        # 2. API-waarde via NotAvailable (omgekeerde logica)
+        # 2. API-waarde: directe vlag én actief roosterblok tellen als niet-beschikbaar
         info = self._user_info()
         if not info:
             return None
         not_available = info.get("NotAvailable")
-        if not_available is None:
+        scheduled = info.get("NotAvailalbeScheduled", info.get("NotAvailableScheduled"))
+        if not_available is None and scheduled is None:
             return None
-        return not bool(not_available)
+        return not (bool(not_available) or bool(scheduled))
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
