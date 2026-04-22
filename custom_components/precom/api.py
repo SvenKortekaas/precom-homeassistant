@@ -570,3 +570,8 @@ class PreComClient:
         """Haal alle groepen op."""
         result = await self._request("GET", f"{API_V2}/Group/GetAllUserGroups")
         return result if isinstance(result, list) else []
+
+    async def get_user_capcodes(self) -> list[dict]:
+        """Haal alle capcodes van de gebruiker op."""
+        result = await self._request("GET", f"{API_V2}/Capcode/GetUserCapcodes")
+        return result if isinstance(result, list) else []

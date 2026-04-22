@@ -12,6 +12,7 @@ from .api import PreComApiError, PreComAuthError, PreComClient
 from .const import (
     DATA_ALARM_MESSAGES,
     DATA_AVAILABILITY_OVERRIDE,
+    DATA_CAPCODES,
     DATA_OVERRIDE_CLEARED_AT,
     DATA_SCHEDULE,
     DATA_USER_INFO,
@@ -58,6 +59,7 @@ class PreComCoordinator(DataUpdateCoordinator):
         self._schedule_scan_interval = schedule_scan_interval
         self._last_alarm_id: int | None = None
         self._last_schedule_update: datetime | None = None
+        self._last_capcodes_update: datetime | None = None
         self._first_update = True
         self.user_id: int | None = None
 
@@ -103,6 +105,8 @@ class PreComCoordinator(DataUpdateCoordinator):
 
             now = datetime.now()
             schedule = self.data.get(DATA_SCHEDULE, []) if self.data else []
+            capcodes = self.data.get(DATA_CAPCODES, []) if self.data else []
+
             if (
                 self._first_update
                 or self._last_schedule_update is None
@@ -111,6 +115,15 @@ class PreComCoordinator(DataUpdateCoordinator):
                 schedule = await self.client.get_user_schedule()
                 self._last_schedule_update = now
                 _LOGGER.debug("Rooster bijgewerkt")
+
+            if (
+                self._first_update
+                or self._last_capcodes_update is None
+                or (now - self._last_capcodes_update).total_seconds() >= self._schedule_scan_interval
+            ):
+                capcodes = await self.client.get_user_capcodes()
+                self._last_capcodes_update = now
+                _LOGGER.debug("Capcodes bijgewerkt: %d gevonden", len(capcodes))
 
             if self._first_update:
                 self._first_update = False
@@ -122,6 +135,7 @@ class PreComCoordinator(DataUpdateCoordinator):
                 DATA_USER_INFO: user_info,
                 DATA_ALARM_MESSAGES: alarm_messages,
                 DATA_SCHEDULE: schedule,
+                DATA_CAPCODES: capcodes,
                 DATA_AVAILABILITY_OVERRIDE: self._availability_override,
                 DATA_OVERRIDE_CLEARED_AT: self._override_cleared_at,
             }

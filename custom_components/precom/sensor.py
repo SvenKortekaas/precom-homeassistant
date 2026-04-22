@@ -15,6 +15,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     DATA_ALARM_MESSAGES,
+    DATA_CAPCODES,
     DATA_SCHEDULE,
     DATA_USER_INFO,
     DOMAIN,
@@ -45,6 +46,7 @@ async def async_setup_entry(
         PreComAlarmCountSensor(coordinator, entry),
         PreComNextShiftSensor(coordinator, entry),
         PreComUserInfoSensor(coordinator, entry),
+        PreComCapcodesSensor(coordinator, entry),
     ])
 
 
@@ -193,4 +195,34 @@ class PreComUserInfoSensor(_BaseSensor):
             "telefoonnummer": info.get("PhoneNumber", ""),
             "gebruikersnaam": info.get("UserName", ""),
             "id":             info.get("UserID", info.get("Id")),
+        }
+
+
+class PreComCapcodesSensor(_BaseSensor):
+    _attr_name = "Pre-Com Capcodes"
+    _attr_icon = "mdi:radio"
+    _attr_native_unit_of_measurement = "capcodes"
+
+    def __init__(self, coordinator: PreComCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry, "capcodes")
+
+    def _capcodes(self) -> list[dict]:
+        return self.coordinator.data.get(DATA_CAPCODES, []) if self.coordinator.data else []
+
+    @property
+    def native_value(self) -> int:
+        return sum(1 for c in self._capcodes() if c.get("Enable", False))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "capcodes": [
+                {
+                    "id":          c.get("CapcodeId"),
+                    "omschrijving": c.get("Description", ""),
+                    "actief":      c.get("Enable", False),
+                }
+                for c in sorted(self._capcodes(), key=lambda x: x.get("CapcodeId", 0))
+            ],
+            "totaal": len(self._capcodes()),
         }
