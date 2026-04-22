@@ -1,9 +1,4 @@
 {
   "name": "Pre-Com",
-  "domain": "precom",
-  "documentation": "https://github.com/svenkortekaas/precom-homeassistant/blob/main/README.md",
-  "issue_tracker": "https://github.com/svenkortekaas/precom-homeassistant/issues",
-  "iot_class": "cloud_polling",
-  "homeassistant": "2023.1.0",
   "content_in_root": false
 }
