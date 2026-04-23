@@ -575,3 +575,14 @@ class PreComClient:
         """Haal alle capcodes van de gebruiker op."""
         result = await self._request("GET", f"{API_V2}/Capcode/GetUserCapcodes")
         return result if isinstance(result, list) else []
+
+    async def update_user_capcode(self, capcode_id: int, enable: bool) -> None:
+        """Schakel een capcode in of uit."""
+        _LOGGER.info(
+            "Pre-Com: capcode %d %s", capcode_id, "inschakelen" if enable else "uitschakelen"
+        )
+        await self._request(
+            "POST",
+            f"{API_V2}/Capcode/UpdateUserCapcode",
+            params={"capcode": str(capcode_id), "enable": "true" if enable else "false"},
+        )

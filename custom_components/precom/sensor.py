@@ -20,6 +20,7 @@ from .const import (
     DATA_USER_INFO,
     DOMAIN,
 )
+from .helpers import _clean_description
 from .coordinator import PreComCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -211,18 +212,20 @@ class PreComCapcodesSensor(_BaseSensor):
 
     @property
     def native_value(self) -> int:
-        return sum(1 for c in self._capcodes() if c.get("Enable", False))
+        return len(self._capcodes())
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        capcodes = self._capcodes()
         return {
             "capcodes": [
                 {
-                    "id":          c.get("CapcodeId"),
-                    "omschrijving": c.get("Description", ""),
-                    "actief":      c.get("Enable", False),
+                    "id":           c.get("CapcodeId"),
+                    "omschrijving": _clean_description(c.get("Description", "")),
+                    "actief":       c.get("Enable", False),
                 }
-                for c in sorted(self._capcodes(), key=lambda x: x.get("CapcodeId", 0))
+                for c in sorted(capcodes, key=lambda x: x.get("CapcodeId", 0))
             ],
-            "totaal": len(self._capcodes()),
+            "totaal": len(capcodes),
+            "aantal_actief": sum(1 for c in capcodes if c.get("Enable", False)),
         }
