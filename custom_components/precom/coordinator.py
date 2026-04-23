@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -25,6 +26,23 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+_PENDING_TIMEOUT = timedelta(seconds=30)
+
+
+@dataclass
+class PendingCapcodeWrite:
+    capcode_id: int
+    expected_enable: bool
+    written_at: datetime
+    expires_at: datetime
+
+
+@dataclass
+class PendingAvailabilityWrite:
+    expected_available: bool
+    written_at: datetime
+    expires_at: datetime
+
 
 class PreComCoordinator(DataUpdateCoordinator):
     """
@@ -33,11 +51,10 @@ class PreComCoordinator(DataUpdateCoordinator):
     - Hoofd-poll (standaard 15 s): gebruikersinfo + rooster
     - Snelle poll (standaard 30 s): alarmberichten
 
-    Lokale override:
-      De override overbrugt de poll-latency direct na een HA-schrijfactie
-      (switch on/off). Zodra de server een status retourneert die strijdig
-      is met de override, wordt die direct ingetrokken — de server is altijd
-      de gezaghebbende bron.
+    Pending-write systeem:
+      Na een schrijfactie (switch on/off) houdt de coordinator de verwachte
+      waarde 30 s vast. Zodra de server de waarde bevestigt, of na 30 s,
+      wint de server alsnog. Dit voorkomt flip-back door trage server-propagatie.
     """
 
     def __init__(
@@ -63,7 +80,12 @@ class PreComCoordinator(DataUpdateCoordinator):
         self._first_update = True
         self.user_id: int | None = None
 
-        self._availability_override: tuple[bool, datetime | None] | None = None
+        # Pending-write tracking
+        self._pending_capcodes: dict[int, PendingCapcodeWrite] = {}
+        self._pending_availability: PendingAvailabilityWrite | None = None
+
+        # Beschikbaarheids-override voor consumers (coordinator.data)
+        self._availability_override: tuple[bool, None] | None = None
         self._override_cleared_at: datetime | None = None
 
         self._alarm_coordinator = DataUpdateCoordinator(
@@ -75,19 +97,40 @@ class PreComCoordinator(DataUpdateCoordinator):
         self._alarm_coordinator._async_update_data = self._async_update_alarms_only
 
     # ------------------------------------------------------------------
-    # Override property — setter reset cleared_at bij nieuwe override
+    # Pending-write API
     # ------------------------------------------------------------------
 
-    @property
-    def availability_override(self) -> tuple[bool, datetime | None] | None:
-        return self._availability_override
+    def mark_capcode_pending(self, capcode_id: int, enable: bool) -> None:
+        """Registreer een verwachte capcode-staat na een geslaagde API-schrijfactie."""
+        now = datetime.now()
+        self._pending_capcodes[capcode_id] = PendingCapcodeWrite(
+            capcode_id=capcode_id,
+            expected_enable=enable,
+            written_at=now,
+            expires_at=now + _PENDING_TIMEOUT,
+        )
+        _LOGGER.debug(
+            "Pre-Com: capcode %s pending write → %s (verloopt %s)",
+            capcode_id,
+            enable,
+            (now + _PENDING_TIMEOUT).strftime("%H:%M:%S"),
+        )
 
-    @availability_override.setter
-    def availability_override(self, value: tuple[bool, datetime | None] | None) -> None:
-        if value is not None:
-            # Nieuwe override gezet → wis eventuele oude "ingetrokken op" tijdstempel
-            self._override_cleared_at = None
-        self._availability_override = value
+    def mark_availability_pending(self, expected: bool) -> None:
+        """Registreer een verwachte beschikbaarheidsstaat na een geslaagde API-schrijfactie."""
+        now = datetime.now()
+        self._pending_availability = PendingAvailabilityWrite(
+            expected_available=expected,
+            written_at=now,
+            expires_at=now + _PENDING_TIMEOUT,
+        )
+        self._availability_override = (expected, None)
+        self._override_cleared_at = None
+        _LOGGER.debug(
+            "Pre-Com: beschikbaarheid pending write → %s (verloopt %s)",
+            "beschikbaar" if expected else "niet-beschikbaar",
+            (now + _PENDING_TIMEOUT).strftime("%H:%M:%S"),
+        )
 
     # ------------------------------------------------------------------
     # Hoofd-update: gebruikersinfo + rooster (traag)
@@ -128,7 +171,10 @@ class PreComCoordinator(DataUpdateCoordinator):
             if self._first_update:
                 self._first_update = False
 
-            # ── Override-beheer ────────────────────────────────────────
+            # Pending-reconciliatie altijd toepassen (ook bij gecachte capcodes)
+            capcodes = self._reconcile_capcodes(capcodes, now)
+
+            # Beschikbaarheids-override bijwerken op basis van server-truth
             self._update_override(user_info)
 
             return {
@@ -145,59 +191,106 @@ class PreComCoordinator(DataUpdateCoordinator):
         except PreComApiError as err:
             raise UpdateFailed(f"API fout: {err}") from err
 
-    def _update_override(self, user_info: dict) -> None:
+    def _reconcile_capcodes(self, capcodes: list[dict], now: datetime) -> list[dict]:
         """
-        Vergelijk de lokale override met de server-status en trek de
-        override in als de server een andere richting aangeeft.
+        Pas pending-writes toe op de capcode-lijst.
 
-        Regels:
-        - Override verlopen (tijdstempel verstreken) → altijd verwijderen.
-        - Override=niet-beschikbaar, server=beschikbaar → server wint
-          (extern beschikbaar gemeld via app/pager).
-        - Override=beschikbaar, server=niet-beschikbaar → server wint
-          (extern niet-beschikbaar gemeld).
-        - Override en server consistent → override handhaven.
+        Server wint altijd, behalve op waarden die wij net zelf schreven,
+        totdat de server onze waarde bevestigt of de 30 s timeout verstreken is.
         """
-        # 1. Verlopen override opruimen
-        if self._availability_override is not None:
-            _, until = self._availability_override
-            if until is not None and datetime.now() > until:
-                _LOGGER.debug("Override verlopen — API-waarde actief")
-                self._availability_override = None
-                self._override_cleared_at = datetime.now()
+        if not self._pending_capcodes:
+            return capcodes
 
-        # 2. Server-truth check
-        if self._availability_override is not None:
-            override_available, until = self._availability_override
-            server_not_available = bool(user_info.get("NotAvailable")) or bool(
-                user_info.get("NotAvailalbeScheduled", user_info.get("NotAvailableScheduled"))
-            )
+        result = []
+        to_delete: list[int] = []
 
-            if not override_available and not server_not_available:
-                # Override zegt niet-beschikbaar; server zegt beschikbaar → intrekken
-                _LOGGER.debug(
-                    "Override actief (niet-beschikbaar) tot %s, server=beschikbaar → "
-                    "override ingetrokken (extern beschikbaar gemeld via app/pager)",
-                    until.isoformat() if until else "onbeperkt",
+        for capcode in capcodes:
+            cid = capcode.get("CapcodeId")
+            server_enable = capcode.get("Enable", False)
+            pending = self._pending_capcodes.get(cid)
+
+            if pending is None:
+                result.append(capcode)
+                continue
+
+            if now >= pending.expires_at:
+                _LOGGER.warning(
+                    "Pre-Com: pending write voor capcode %s verlopen na 30s "
+                    "zonder server-bevestiging — server-state %s gevolgd",
+                    cid,
+                    server_enable,
                 )
-                self._availability_override = None
-                self._override_cleared_at = datetime.now()
-
-            elif override_available and server_not_available:
-                # Override zegt beschikbaar; server zegt niet-beschikbaar → intrekken
+                to_delete.append(cid)
+                result.append(capcode)
+            elif server_enable == pending.expected_enable:
                 _LOGGER.debug(
-                    "Override actief (beschikbaar) tot %s, server=niet-beschikbaar → "
-                    "override ingetrokken",
-                    until.isoformat() if until else "onbeperkt",
+                    "Pre-Com: capcode %s server bevestigt %s — pending opgeheven",
+                    cid,
+                    server_enable,
                 )
-                self._availability_override = None
-                self._override_cleared_at = datetime.now()
-
+                to_delete.append(cid)
+                result.append(capcode)
             else:
                 _LOGGER.debug(
-                    "Override actief tot %s, server consistent → override gevolgd",
-                    until.isoformat() if until else "onbeperkt",
+                    "Pre-Com: capcode %s server=%s maar pending=%s — verwachte waarde aanhouden",
+                    cid,
+                    server_enable,
+                    pending.expected_enable,
                 )
+                result.append({**capcode, "Enable": pending.expected_enable})
+
+        for cid in to_delete:
+            del self._pending_capcodes[cid]
+
+        return result
+
+    def _update_override(self, user_info: dict) -> None:
+        """
+        Vergelijk de pending availability-write met de server-status.
+
+        Regels:
+        - Geen pending → override wissen, server wint direct.
+        - Pending verlopen (> 30s) → override wissen, server wint, log warning.
+        - Server bevestigt verwachte waarde → pending en override wissen.
+        - Server wijkt af binnen 30s → override aanhouden (server-lag overbruggen).
+        """
+        now = datetime.now()
+        server_not_available = bool(user_info.get("NotAvailable")) or bool(
+            user_info.get("NotAvailalbeScheduled", user_info.get("NotAvailableScheduled"))
+        )
+        server_available = not server_not_available
+
+        pending = self._pending_availability
+        if pending is None:
+            self._availability_override = None
+            return
+
+        if now >= pending.expires_at:
+            _LOGGER.warning(
+                "Pre-Com: pending availability write verlopen na 30s "
+                "— server=%s gevolgd",
+                "beschikbaar" if server_available else "niet-beschikbaar",
+            )
+            self._pending_availability = None
+            self._availability_override = None
+            self._override_cleared_at = now
+            return
+
+        if server_available == pending.expected_available:
+            _LOGGER.debug(
+                "Pre-Com: server bevestigt beschikbaarheid=%s — pending opgeheven",
+                pending.expected_available,
+            )
+            self._pending_availability = None
+            self._availability_override = None
+            self._override_cleared_at = now
+        else:
+            _LOGGER.debug(
+                "Pre-Com: server=%s maar pending=%s — verwachte waarde aanhouden",
+                "beschikbaar" if server_available else "niet-beschikbaar",
+                pending.expected_available,
+            )
+            self._availability_override = (pending.expected_available, None)
 
     # ------------------------------------------------------------------
     # Snelle alarm-only update

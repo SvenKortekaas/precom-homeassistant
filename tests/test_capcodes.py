@@ -211,6 +211,7 @@ class TestPreComCapcodeSwitchActions:
         coord.client = MagicMock()
         coord.client.update_user_capcode = AsyncMock()
         coord.async_request_refresh = AsyncMock()
+        coord.mark_capcode_pending = MagicMock()
         switch = PreComCapcodeSwitch(coord, _make_entry(), 106530, "Test")
         switch.async_write_ha_state = MagicMock()
         await switch.async_turn_on()
@@ -225,12 +226,54 @@ class TestPreComCapcodeSwitchActions:
         coord.client = MagicMock()
         coord.client.update_user_capcode = AsyncMock()
         coord.async_request_refresh = AsyncMock()
+        coord.mark_capcode_pending = MagicMock()
         switch = PreComCapcodeSwitch(coord, _make_entry(), 106530, "Test")
         switch.async_write_ha_state = MagicMock()
         await switch.async_turn_off()
         coord.client.update_user_capcode.assert_called_once_with(106530, False)
         assert switch._attr_is_on is False
         coord.async_request_refresh.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_mark_pending_called_after_successful_turn_on(self) -> None:
+        from custom_components.precom.switch import PreComCapcodeSwitch
+        coord = _make_coordinator([{"CapcodeId": 106530, "Enable": False, "Description": "T"}])
+        coord.client = MagicMock()
+        coord.client.update_user_capcode = AsyncMock()
+        coord.async_request_refresh = AsyncMock()
+        coord.mark_capcode_pending = MagicMock()
+        switch = PreComCapcodeSwitch(coord, _make_entry(), 106530, "T")
+        switch.async_write_ha_state = MagicMock()
+        await switch.async_turn_on()
+        coord.mark_capcode_pending.assert_called_once_with(106530, True)
+
+    @pytest.mark.asyncio
+    async def test_mark_pending_called_after_successful_turn_off(self) -> None:
+        from custom_components.precom.switch import PreComCapcodeSwitch
+        coord = _make_coordinator([{"CapcodeId": 106530, "Enable": True, "Description": "T"}])
+        coord.client = MagicMock()
+        coord.client.update_user_capcode = AsyncMock()
+        coord.async_request_refresh = AsyncMock()
+        coord.mark_capcode_pending = MagicMock()
+        switch = PreComCapcodeSwitch(coord, _make_entry(), 106530, "T")
+        switch.async_write_ha_state = MagicMock()
+        await switch.async_turn_off()
+        coord.mark_capcode_pending.assert_called_once_with(106530, False)
+
+    @pytest.mark.asyncio
+    async def test_mark_pending_not_called_on_api_failure(self) -> None:
+        from custom_components.precom.switch import PreComCapcodeSwitch
+        from custom_components.precom.api import PreComApiError
+        import homeassistant.exceptions as ha_exc
+        coord = _make_coordinator([{"CapcodeId": 106530, "Enable": False, "Description": "T"}])
+        coord.client = MagicMock()
+        coord.client.update_user_capcode = AsyncMock(side_effect=PreComApiError("fout"))
+        coord.mark_capcode_pending = MagicMock()
+        switch = PreComCapcodeSwitch(coord, _make_entry(), 106530, "T")
+        switch.async_write_ha_state = MagicMock()
+        with pytest.raises(ha_exc.HomeAssistantError):
+            await switch.async_turn_on()
+        coord.mark_capcode_pending.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_turn_on_raises_on_api_error(self) -> None:
@@ -240,6 +283,7 @@ class TestPreComCapcodeSwitchActions:
         coord = _make_coordinator([{"CapcodeId": 106530, "Enable": False, "Description": "T"}])
         coord.client = MagicMock()
         coord.client.update_user_capcode = AsyncMock(side_effect=PreComApiError("fout"))
+        coord.mark_capcode_pending = MagicMock()
         switch = PreComCapcodeSwitch(coord, _make_entry(), 106530, "T")
         switch.async_write_ha_state = MagicMock()
         with pytest.raises(ha_exc.HomeAssistantError):
@@ -253,6 +297,7 @@ class TestPreComCapcodeSwitchActions:
         coord = _make_coordinator([{"CapcodeId": 106530, "Enable": False, "Description": "T"}])
         coord.client = MagicMock()
         coord.client.update_user_capcode = AsyncMock(side_effect=PreComApiError("fout"))
+        coord.mark_capcode_pending = MagicMock()
         switch = PreComCapcodeSwitch(coord, _make_entry(), 106530, "T")
         switch._attr_is_on = False
         switch.async_write_ha_state = MagicMock()
@@ -382,3 +427,125 @@ class TestSensorAttributes:
         attrs = sensor.extra_state_attributes
         assert attrs["totaal"] == 3
         assert attrs["aantal_actief"] == 2
+
+
+# ── Pending-write reconciliatie ────────────────────────────────────────────────
+
+def _make_real_coordinator():
+    """Maak een echte PreComCoordinator met een mock client."""
+    from custom_components.precom.coordinator import PreComCoordinator
+    client = MagicMock()
+    return PreComCoordinator(hass=None, client=client)
+
+
+class TestCapcodePendingReconciliation:
+
+    def test_no_pending_returns_server_value(self) -> None:
+        coord = _make_real_coordinator()
+        from datetime import datetime
+        capcodes = [{"CapcodeId": 1, "Enable": False}]
+        result = coord._reconcile_capcodes(capcodes, datetime.now())
+        assert result[0]["Enable"] is False
+
+    def test_pending_not_yet_confirmed_holds_expected(self) -> None:
+        from datetime import datetime, timedelta
+        coord = _make_real_coordinator()
+        coord.mark_capcode_pending(1, True)
+        # Server zegt nog False — verwachte waarde moet aanhouden
+        capcodes = [{"CapcodeId": 1, "Enable": False}]
+        result = coord._reconcile_capcodes(capcodes, datetime.now())
+        assert result[0]["Enable"] is True
+
+    def test_pending_confirmed_by_server_clears_pending(self) -> None:
+        from datetime import datetime
+        coord = _make_real_coordinator()
+        coord.mark_capcode_pending(1, True)
+        # Server bevestigt True — pending moet verdwijnen
+        capcodes = [{"CapcodeId": 1, "Enable": True}]
+        coord._reconcile_capcodes(capcodes, datetime.now())
+        assert 1 not in coord._pending_capcodes
+
+    def test_pending_not_confirmed_keeps_pending(self) -> None:
+        from datetime import datetime
+        coord = _make_real_coordinator()
+        coord.mark_capcode_pending(1, True)
+        capcodes = [{"CapcodeId": 1, "Enable": False}]
+        coord._reconcile_capcodes(capcodes, datetime.now())
+        assert 1 in coord._pending_capcodes
+
+    def test_expired_pending_server_wins(self) -> None:
+        from datetime import datetime, timedelta
+        coord = _make_real_coordinator()
+        coord.mark_capcode_pending(1, True)
+        capcodes = [{"CapcodeId": 1, "Enable": False}]
+        # Simuleer expired: now = expires_at + 1s
+        future = coord._pending_capcodes[1].expires_at + timedelta(seconds=1)
+        result = coord._reconcile_capcodes(capcodes, future)
+        assert result[0]["Enable"] is False
+        assert 1 not in coord._pending_capcodes
+
+    def test_capcode_without_pending_not_affected(self) -> None:
+        from datetime import datetime
+        coord = _make_real_coordinator()
+        coord.mark_capcode_pending(99, True)
+        capcodes = [{"CapcodeId": 1, "Enable": False}]
+        result = coord._reconcile_capcodes(capcodes, datetime.now())
+        assert result[0]["Enable"] is False
+
+    def test_multiple_capcodes_only_pending_one_affected(self) -> None:
+        from datetime import datetime
+        coord = _make_real_coordinator()
+        coord.mark_capcode_pending(1, True)
+        capcodes = [
+            {"CapcodeId": 1, "Enable": False},
+            {"CapcodeId": 2, "Enable": False},
+        ]
+        result = coord._reconcile_capcodes(capcodes, datetime.now())
+        by_id = {c["CapcodeId"]: c["Enable"] for c in result}
+        assert by_id[1] is True   # pending toegepast
+        assert by_id[2] is False  # ongewijzigd
+
+
+class TestAvailabilityPendingReconciliation:
+
+    def test_no_pending_clears_override(self) -> None:
+        from datetime import datetime
+        coord = _make_real_coordinator()
+        coord._availability_override = (False, None)
+        coord._update_override({"NotAvailable": False})
+        assert coord._availability_override is None
+
+    def test_pending_not_confirmed_holds_override(self) -> None:
+        from datetime import datetime
+        coord = _make_real_coordinator()
+        coord.mark_availability_pending(False)
+        # Server zegt beschikbaar — pending houdt niet-beschikbaar vast
+        coord._update_override({"NotAvailable": False, "NotAvailalbeScheduled": False})
+        assert coord._availability_override == (False, None)
+        assert coord._pending_availability is not None
+
+    def test_pending_confirmed_by_server_clears_pending(self) -> None:
+        from datetime import datetime
+        coord = _make_real_coordinator()
+        coord.mark_availability_pending(False)
+        # Server bevestigt niet-beschikbaar
+        coord._update_override({"NotAvailable": True})
+        assert coord._pending_availability is None
+        assert coord._availability_override is None
+
+    def test_expired_pending_server_wins(self) -> None:
+        from datetime import datetime, timedelta
+        coord = _make_real_coordinator()
+        coord.mark_availability_pending(False)
+        # Forceer expired pending
+        coord._pending_availability.expires_at = datetime.now() - timedelta(seconds=1)
+        coord._update_override({"NotAvailable": False})
+        assert coord._pending_availability is None
+        assert coord._availability_override is None
+
+    def test_mark_availability_pending_sets_override(self) -> None:
+        coord = _make_real_coordinator()
+        coord.mark_availability_pending(False)
+        assert coord._availability_override == (False, None)
+        assert coord._pending_availability is not None
+        assert coord._pending_availability.expected_available is False

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from homeassistant.components.switch import SwitchEntity
@@ -119,12 +119,13 @@ class PreComAvailabilitySwitch(CoordinatorEntity[PreComCoordinator], SwitchEntit
         return not (bool(not_available) or bool(scheduled))
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Meld beschikbaar — verwijder het agenda-blok en de lokale override."""
+        """Meld beschikbaar — pending-write zorgt dat de switch niet terugklapt."""
         _LOGGER.info("Schakelaar: beschikbaar melden")
         try:
             result = await self.coordinator.client.set_available()
-            # Verwijder de lokale override — API-waarde is nu leidend
-            self.coordinator.availability_override = None
+            self.coordinator.mark_availability_pending(True)
+            self._attr_is_on = True
+            self.async_write_ha_state()
             _LOGGER.info(
                 "Beschikbaar gemeld — Pre-Com %s",
                 "bevestigd" if result else "geen bevestiging (controleer app)",
@@ -135,35 +136,25 @@ class PreComAvailabilitySwitch(CoordinatorEntity[PreComCoordinator], SwitchEntit
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """
-        Meld niet-beschikbaar via roosterblok + lokale override.
+        Meld niet-beschikbaar via roosterblok.
 
-        De override zorgt dat de switch UIT blijft staan ook al geeft
-        GetUserInfo nog NotAvailable: false terug.
+        De pending-write zorgt dat de switch UIT blijft staan totdat de
+        server het roosterblok bevestigt (of na 30 s: server wint).
         """
         hours = self._get_not_available_hours()
         _LOGGER.info("Schakelaar: niet beschikbaar melden voor %d uur", hours)
         try:
-            # Zet de lokale override VOOR de API-call zodat de switch
-            # direct omschakelt en niet terugspringt na de refresh
-            until = datetime.now() + timedelta(hours=hours)
-            self.coordinator.availability_override = (False, until)
-            self.async_write_ha_state()
-
             result = await self.coordinator.client.set_not_available(hours)
+            self.coordinator.mark_availability_pending(False)
+            self._attr_is_on = False
+            self.async_write_ha_state()
             _LOGGER.info(
-                "Niet beschikbaar gemeld voor %d uur (tot %s) — Pre-Com %s",
+                "Niet beschikbaar gemeld voor %d uur — Pre-Com %s",
                 hours,
-                until.strftime("%H:%M"),
                 "bevestigd" if result else "geen bevestiging (controleer app)",
             )
-            # Korte vertraging zodat Pre-Com de wijziging kan verwerken,
-            # daarna refresh — de override blijft actief dus switch blijft UIT
             await self.coordinator.async_request_refresh()
-
         except Exception as err:
-            # API-fout: verwijder de optimistische override
-            self.coordinator.availability_override = None
-            self.async_write_ha_state()
             _LOGGER.error("Niet beschikbaar melden mislukt: %s", err)
 
     def _get_not_available_hours(self) -> int:
@@ -242,6 +233,7 @@ class PreComCapcodeSwitch(CoordinatorEntity[PreComCoordinator], SwitchEntity):
                 f"Capcode {self._capcode_id} kon niet worden "
                 f"{'ingeschakeld' if enable else 'uitgeschakeld'}: {err}"
             ) from err
+        self.coordinator.mark_capcode_pending(self._capcode_id, enable)
         self._attr_is_on = enable
         self.async_write_ha_state()
         await self.coordinator.async_request_refresh()

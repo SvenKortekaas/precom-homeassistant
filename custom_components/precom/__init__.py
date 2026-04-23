@@ -101,10 +101,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 if isinstance(coord, PreComCoordinator):
                     if call.data["available"]:
                         await coord.client.set_available()
-                        coord.availability_override = None
+                        coord.mark_availability_pending(True)
                     else:
                         hours = call.data.get("hours", 8)
                         await coord.client.set_not_available(hours)
+                        coord.mark_availability_pending(False)
                     await coord.async_request_refresh()
 
         async def handle_respond_to_alarm(call: ServiceCall) -> None:

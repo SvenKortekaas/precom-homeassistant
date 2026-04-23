@@ -1,100 +1,256 @@
 # =============================================================================
-# Pre-Com Integratie — Voorbeeldscripts
+# VOORBEELD SCRIPTS — Pre-Com integratie voor Home Assistant
 # =============================================================================
 #
-# Deze scripts stellen je in staat om je Pre-Com beschikbaarheidsstatus
-# rechtstreeks vanuit Home Assistant te beheren. Ze zijn speciaal ontworpen
-# om te worden aangeroepen via Apple Opdrachten (Shortcuts) op een iPhone
-# en/of Apple Watch — zo kun je jezelf met één tik aan- of afmelden als
-# beschikbaar piketmedewerker, zonder de Pre-Com app te openen.
-#
-# GEBRUIK MET APPLE OPDRACHTEN
-# ─────────────────────────────
-# Maak in de Opdrachten-app op je iPhone of Apple Watch twee shortcuts aan,
-# elk met de actie "Voer een Home Assistant script uit" (vereist de officiële
-# Home Assistant Companion App):
-#
-#   • Opdracht "Pre-Com AAN"  → roept script.pre_com_beschikbaar_zetten aan
-#   • Opdracht "Pre-Com UIT"  → roept script.pre_com_niet_beschikbaar_rest_dag aan
-#
-# Voeg de opdrachten toe aan je Apple Watch-wijzerplaat of als widget op het
-# beginscherm van je iPhone voor directe toegang. Zo meld je jezelf met één
-# tik aan of af — ideaal bij het begin of einde van een piketperiode.
+# Scripts zijn herbruikbare acties die je vanuit meerdere automations,
+# dashboards of externe tools (Apple Shortcuts, Android widgets) aanroept.
 #
 # INSTALLATIE
-# ───────────
-# 1. Kopieer de inhoud van dit bestand naar je scripts.yaml, of voeg het toe
-#    als losse include in je configuration.yaml:
+# ─────────────
+# Voeg toe aan scripts.yaml, of via Instellingen → Scripts → Script aanmaken
+# → Opslaan als YAML. Herlaad daarna via Instellingen → Server controls.
 #
-#      script: !include scripts.yaml
-#
-# 2. Pas de entity_id's hieronder aan als jouw Pre-Com integratie andere
-#    namen gebruikt. Controleer dit via Instellingen → Apparaten & Services.
-#
-# 3. Herlaad je scripts via Instellingen → Server controls → Scripts herladen,
-#    of herstart Home Assistant volledig.
-#
-# VEREISTEN
-# ─────────
-# • Pre-Com integratie geïnstalleerd en geconfigureerd via HACS
-# • Entiteiten aanwezig:
-#     - switch.pre_com_beschikbaar
-#     - number.pre_com_niet_beschikbaar_uren
-# • Home Assistant Companion App op iPhone/Apple Watch (voor Opdrachten-koppeling)
-#
+# PLACEHOLDERS — pas altijd aan:
+#   switch.pre_com_beschikbaar         → pre_com_<gebruikersnaam>_pre_com_beschikbaar
+#   number.pre_com_niet_beschikbaar_uren → idem
+#   switch.pre_com_capcode_*           → jouw capcode-switches
+#   notify.mobiel                      → je eigen notify-service
+#   tts.cloud_say                      → je eigen TTS-service
+#   media_player.woonkamer             → je mediaspeler
 # =============================================================================
 
 
-# -----------------------------------------------------------------------------
-# Script 1: Zet jezelf op BESCHIKBAAR
-# -----------------------------------------------------------------------------
-# Gebruik dit script om jezelf aan te melden als beschikbaar piketmedewerker.
-# De Pre-Com schakelaar wordt ingeschakeld en je status is direct actief.
-# -----------------------------------------------------------------------------
+# === BESCHIKBAARHEID =========================================================
 
-pre_com_beschikbaar_zetten:
-  alias: "Pre-Com: Beschikbaar zetten"
-  description: "Zet de Pre-Com beschikbaarheid op AAN"
+# ---------------------------------------------------------------
+# Script: precom_beschikbaar_melden
+# Doel:   Markeer jezelf als beschikbaar bij Pre-Com.
+# Gebruik: Dashboard-knop, Apple Shortcut, of vanuit automations.
+# Pre-Com:
+#   - switch.pre_com_beschikbaar
+# ---------------------------------------------------------------
+precom_beschikbaar_melden:
+  alias: "Pre-Com: Beschikbaar melden"
+  description: "Zet de Pre-Com beschikbaarheidsschakelaar op AAN."
   icon: mdi:account-check
   mode: single
   sequence:
     - action: switch.turn_on
       target:
-        entity_id: switch.pre_com_beschikbaar  # Pas aan indien nodig
+        entity_id: switch.pre_com_beschikbaar  # <-- aanpassen
 
 
-# -----------------------------------------------------------------------------
-# Script 2: Zet jezelf op NIET BESCHIKBAAR voor de rest van de dag
-# -----------------------------------------------------------------------------
-# Gebruik dit script om jezelf af te melden voor de rest van de huidige dag.
-# Het script berekent automatisch hoeveel uren er nog resten tot 23:59 uur
-# en schrijft deze waarde naar de Pre-Com "niet beschikbaar uren" entiteit,
-# waarna de beschikbaarheidsschakelaar wordt uitgeschakeld.
-#
-# Voorbeeld: aanroep om 14:30 → stelt 9,5 uur niet-beschikbaar in.
-# -----------------------------------------------------------------------------
-
-pre_com_niet_beschikbaar_rest_dag:
-  alias: "Pre-Com: Niet beschikbaar rest van de dag"
-  description: >
-    Berekent de resterende uren tot middernacht en zet Pre-Com op niet beschikbaar.
+# ---------------------------------------------------------------
+# Script: precom_niet_beschikbaar_melden
+# Doel:   Markeer jezelf als niet-beschikbaar voor een opgegeven aantal uren.
+# Parameters:
+#   uren  (required, int, 1–168) — hoe lang niet beschikbaar
+# Gebruik: Dashboard-knop met popup, Apple Shortcut met inputveld,
+#          of vanuit andere automations met vaste waarde.
+# Pre-Com:
+#   - number.pre_com_niet_beschikbaar_uren
+#   - switch.pre_com_beschikbaar
+# ---------------------------------------------------------------
+precom_niet_beschikbaar_melden:
+  alias: "Pre-Com: Niet beschikbaar melden"
+  description: "Zet Pre-Com op niet beschikbaar voor het opgegeven aantal uren."
   icon: mdi:account-remove
   mode: single
+  fields:
+    uren:
+      name: Aantal uren
+      description: "Hoe lang niet beschikbaar (1–168 uur)"
+      required: true
+      default: 8
+      selector:
+        number:
+          min: 1
+          max: 168
+          unit_of_measurement: uur
   sequence:
-
-    # Stap 1: Bereken het aantal resterende uren tot 23:59 vandaag
-    - variables:
-        uren_resterend: >
-          {{ ((today_at('23:59:00') - now()).total_seconds() / 3600) | round(1) }}
-
-    # Stap 2: Stel het aantal niet-beschikbare uren in bij de integratie
     - action: number.set_value
       target:
-        entity_id: number.pre_com_niet_beschikbaar_uren  # Pas aan indien nodig
+        entity_id: number.pre_com_niet_beschikbaar_uren  # <-- aanpassen
       data:
-        value: "{{ uren_resterend }}"
-
-    # Stap 3: Zet de beschikbaarheidsschakelaar uit
+        value: "{{ uren | int(8) }}"
     - action: switch.turn_off
       target:
-        entity_id: switch.pre_com_beschikbaar  # Pas aan indien nodig
+        entity_id: switch.pre_com_beschikbaar  # <-- aanpassen
+
+
+# ---------------------------------------------------------------
+# Script: precom_niet_beschikbaar_rest_dag
+# Doel:   Niet beschikbaar melden voor de rest van de huidige dag
+#         (berekend automatisch tot 23:59).
+# Gebruik: Apple Shortcut, widget, of automatisering bij einde dienst.
+# Pre-Com:
+#   - number.pre_com_niet_beschikbaar_uren
+#   - switch.pre_com_beschikbaar
+# ---------------------------------------------------------------
+precom_niet_beschikbaar_rest_dag:
+  alias: "Pre-Com: Niet beschikbaar rest van de dag"
+  description: "Berekent de resterende uren tot middernacht en meldt niet beschikbaar."
+  icon: mdi:calendar-remove
+  mode: single
+  sequence:
+    - variables:
+        uren_resterend: >
+          {{ ((today_at('23:59:00') - now()).total_seconds() / 3600)
+             | round(0) | int | max(1) }}
+    - action: number.set_value
+      target:
+        entity_id: number.pre_com_niet_beschikbaar_uren  # <-- aanpassen
+      data:
+        value: "{{ uren_resterend }}"
+    - action: switch.turn_off
+      target:
+        entity_id: switch.pre_com_beschikbaar  # <-- aanpassen
+
+
+# ---------------------------------------------------------------
+# Script: precom_outside_region_activate
+# Doel:   Meldt buiten regio via de Pre-Com service, handig als
+#         dashboard-knop of widget op een Apple Watch.
+# Parameters:
+#   uren  (required, int, 1–168)
+# Pre-Com:
+#   - Service: precom.set_outside_region
+# ---------------------------------------------------------------
+precom_outside_region_activate:
+  alias: "Pre-Com: Buiten regio melden"
+  description: "Meldt buiten regio voor het opgegeven aantal uren."
+  icon: mdi:map-marker-off
+  mode: single
+  fields:
+    uren:
+      name: Aantal uren
+      description: "Hoe lang buiten regio (1–168 uur)"
+      required: true
+      default: 8
+      selector:
+        number:
+          min: 1
+          max: 168
+          unit_of_measurement: uur
+  sequence:
+    - action: precom.set_outside_region
+      data:
+        hours: "{{ uren | int(8) }}"
+
+
+# === UITRUK-PROTOCOL =========================================================
+
+# ---------------------------------------------------------------
+# Script: precom_uitruk_protocol
+# Doel:   Volledig uitruk-protocol: scene opslaan, rode lampen aan,
+#         TTS-aankondiging, push-melding, wacht, scene herstellen.
+# Parameters:
+#   bericht_tekst       (required, string) — de alarmtekst
+#   wacht_minuten       (optional, int, default 5) — wachttijd voor scene-herstel
+# Gebruik: Aanroepen vanuit auto_uitruk_lichten/pushmelding automations
+#          voor geconsolideerde logica.
+# Vereist:
+#   - light.uitruk_lampen      (pas aan)
+#   - notify.mobiel            (pas aan)
+#   - tts.cloud_say            (pas aan)
+#   - media_player.woonkamer   (pas aan)
+# Pre-Com:
+#   - Aangestuurd door precom_alarm_received event
+# Modus: parallel — meerdere alarmen tegelijk worden allemaal afgehandeld.
+# ---------------------------------------------------------------
+precom_uitruk_protocol:
+  alias: "Pre-Com: Uitruk-protocol"
+  description: >
+    Scene opslaan, rode lampen, TTS, push-melding, wachten en scene herstellen.
+  icon: mdi:alarm-light
+  mode: parallel
+  max: 5
+  fields:
+    bericht_tekst:
+      name: Alarmtekst
+      description: "De tekst van het Pre-Com alarmbericht"
+      required: true
+      selector:
+        text:
+    wacht_minuten:
+      name: Wachttijd (minuten)
+      description: "Hoe lang de rode lampen aan blijven"
+      required: false
+      default: 5
+      selector:
+        number:
+          min: 1
+          max: 30
+          unit_of_measurement: min
+  sequence:
+    - action: scene.create
+      data:
+        scene_id: precom_voor_uitruk
+        snapshot_entities:
+          - light.uitruk_lampen  # <-- aanpassen
+    - action: light.turn_on
+      target:
+        entity_id: light.uitruk_lampen  # <-- aanpassen
+      data:
+        brightness_pct: 100
+        rgb_color: [255, 0, 0]
+    - action: tts.cloud_say  # <-- aanpassen naar eigen TTS
+      target:
+        entity_id: media_player.woonkamer  # <-- aanpassen
+      data:
+        message: "Pre-Com alarm: {{ bericht_tekst }}"
+    - action: notify.mobiel  # <-- aanpassen
+      data:
+        title: "🚨 Pre-Com Alarm"
+        message: "{{ bericht_tekst }}"
+    - delay:
+        minutes: "{{ wacht_minuten | int(5) }}"
+    - action: scene.turn_on
+      target:
+        entity_id: scene.precom_voor_uitruk
+
+
+# === CAPCODE-BEHEER ==========================================================
+
+# ---------------------------------------------------------------
+# Script: precom_capcodes_nachtmode
+# Doel:   Schakel een groep non-urgente capcodes tegelijk in of uit.
+#         Bedoeld voor nachtmode, dienst-wissels of vakantie.
+# Parameters:
+#   nacht  (required, bool) — true = alles uit, false = alles aan
+# Vereist:
+#   - Capcode-switches (pas de lijst aan naar jouw eigen capcodes)
+# Pre-Com:
+#   - switch.pre_com_capcode_*
+# Modus: single.
+# ---------------------------------------------------------------
+precom_capcodes_nachtmode:
+  alias: "Pre-Com: Capcodes nachtmode"
+  description: "Schakel non-urgente capcodes in of uit als groep."
+  icon: mdi:radio-tower
+  mode: single
+  fields:
+    nacht:
+      name: Nachtmode
+      description: "true = alle non-urgente capcodes uit, false = aan"
+      required: true
+      selector:
+        boolean:
+  sequence:
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ nacht | bool }}"
+          sequence:
+            - action: switch.turn_off
+              target:
+                entity_id:
+                  # Vervang met jouw non-urgente capcodes
+                  - switch.pre_com_capcode_ploeg_b      # <-- aanpassen
+                  - switch.pre_com_capcode_ondersteuning # <-- aanpassen
+      default:
+        - action: switch.turn_on
+          target:
+            entity_id:
+              - switch.pre_com_capcode_ploeg_b      # <-- aanpassen
+              - switch.pre_com_capcode_ondersteuning # <-- aanpassen

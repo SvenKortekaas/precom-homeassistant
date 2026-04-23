@@ -1,51 +1,94 @@
-# =============================================================
+# =============================================================================
 # VOORBEELD AUTOMATIONS — Pre-Com integratie voor Home Assistant
-# =============================================================
-# Beschikbare events:
+# =============================================================================
 #
-#   precom_alarm_received  — wordt gevuurd bij elk nieuw alarmbericht
+# Beschikbare Pre-Com events:
+#   precom_alarm_received  — gevuurd bij elk nieuw alarmbericht
 #                            Data: alarm_id, text, time, group, type, capcode
 #
-# Beschikbare services:
+# Beschikbare Pre-Com services:
 #   precom.set_available        — beschikbaar/niet beschikbaar melden
 #   precom.respond_to_alarm     — reageren op een specifiek alarm
 #   precom.set_outside_region   — buiten regio melden
-# =============================================================
+#
+# INSTALLATIE
+# ─────────────
+# Plak de gewenste automations in je automations.yaml, of voeg ze toe via
+# Instellingen → Automatiseringen → Automation aanmaken → YAML bewerken.
+#
+# PLACEHOLDERS — pas altijd aan:
+#   light.uitruk_lampen        → je eigen lamp of lichtgroep
+#   notify.mobiel              → je eigen notify-service (bv. notify.mobile_app_telefoon)
+#   tts.cloud_say              → je eigen TTS-service
+#   media_player.woonkamer     → mediaspeler voor TTS
+#   person.jouw_naam           → jouw persoonsentiteit
+#   switch.pre_com_beschikbaar → pre_com_<gebruikersnaam>_pre_com_beschikbaar
+#   input_boolean.precom_*     → maak deze helpers aan via Instellingen → Helpers
+#   input_number.precom_*      → idem
+#   input_select.dienst        → idem
+# =============================================================================
 
 
-# 1. Lichten aan bij nieuw alarm (5 minuten)
-- id: precom_alarm_lichten_aan
-  alias: "Pre-Com: Lichten aan bij alarm"
+# === UITRUK-AFHANDELING ======================================================
+
+# ---------------------------------------------------------------
+# Naam: auto_uitruk_lichten
+# Doel: Bij een nieuw Pre-Com alarm de uitruk-verlichting aanzetten,
+#       daarvóór de scene opslaan en daarna automatisch herstellen.
+# Vereist:
+#   - light.uitruk_lampen      (pas aan naar eigen lamp/groep)
+#   - Geen Pre-Com entity direct — trigger is het event
+# Pre-Com:
+#   - Trigger: precom_alarm_received event
+# Modus: restart — meerdere alarmen in korte tijd zijn normaal,
+#        elke nieuwe alarm herstart de 5-minuten-timer.
+# ---------------------------------------------------------------
+- id: auto_uitruk_lichten
+  alias: "Pre-Com: Uitruk-verlichting aan bij alarm"
   mode: restart
   trigger:
     - platform: event
       event_type: precom_alarm_received
-  condition:
-    - condition: template
-      value_template: "{{ trigger.event.data.text | length > 0 }}"
   action:
-    - service: light.turn_on
+    # Sla de huidige lichtstand op zodat we die later kunnen herstellen
+    - action: scene.create
+      data:
+        scene_id: precom_voor_uitruk
+        snapshot_entities:
+          - light.uitruk_lampen  # <-- aanpassen
+    - action: light.turn_on
       target:
-        area_id: slaapkamer        # Pas aan naar jouw area_id
+        entity_id: light.uitruk_lampen  # <-- aanpassen
       data:
         brightness_pct: 100
-        color_temp: 153
-    - delay:
-        minutes: 5
-    - service: light.turn_off
+        rgb_color: [255, 0, 0]
+    - delay: "00:05:00"
+    # Herstel naar de opgeslagen scene (niet scene.apply — dat overschrijft)
+    - action: scene.turn_on
       target:
-        area_id: slaapkamer
+        entity_id: scene.precom_voor_uitruk
 
 
-# 2. Kritieke pushmelding bij nieuw alarm
-- id: precom_alarm_pushmelding
-  alias: "Pre-Com: Pushmelding bij alarm"
+# ---------------------------------------------------------------
+# Naam: auto_uitruk_pushmelding
+# Doel: Push-melding sturen met de alarmtekst en twee actieknoppen:
+#       "Ik ga" / "Kan niet" voor directe reactie zonder app te openen.
+# Vereist:
+#   - notify.mobiel             (pas aan naar eigen notify-service)
+# Pre-Com:
+#   - Trigger: precom_alarm_received event
+#   - Service: precom.respond_to_alarm (via action-automations hieronder)
+# Modus: queued — alle alarmen worden afgehandeld, geen wordt overgeslagen.
+# ---------------------------------------------------------------
+- id: auto_uitruk_pushmelding
+  alias: "Pre-Com: Push-melding bij alarm"
   mode: queued
+  max: 10
   trigger:
     - platform: event
       event_type: precom_alarm_received
   action:
-    - service: notify.mobile_app_jouw_telefoon    # Pas aan
+    - action: notify.mobiel  # <-- aanpassen
       data:
         title: "🚨 Pre-Com Alarm"
         message: "{{ trigger.event.data.text }}"
@@ -59,14 +102,22 @@
             - action: "PRECOM_JA_{{ trigger.event.data.alarm_id }}"
               title: "✅ Ik ga"
             - action: "PRECOM_NEE_{{ trigger.event.data.alarm_id }}"
-              title: "❌ Ik ga niet"
-          tag: precom_alarm
+              title: "❌ Kan niet"
+          tag: "precom_alarm_{{ trigger.event.data.alarm_id }}"
 
 
-# 3. Reageer op "Ik ga" knop in de pushmelding
-- id: precom_reactie_ja
-  alias: "Pre-Com: Ik ga — beschikbaar melden"
+# ---------------------------------------------------------------
+# Naam: auto_reactie_ja
+# Doel: Verwerk de "Ik ga"-knop uit de push-melding — meldt beschikbaar
+#       bij het bijbehorende alarm.
+# Pre-Com:
+#   - Service: precom.respond_to_alarm
+# Modus: queued — meerdere alarm-reacties mogen niet verloren gaan.
+# ---------------------------------------------------------------
+- id: auto_reactie_ja
+  alias: "Pre-Com: Reactie — Ik ga"
   mode: queued
+  max: 10
   trigger:
     - platform: event
       event_type: mobile_app_notification_action
@@ -76,19 +127,25 @@
   action:
     - variables:
         alarm_id: "{{ trigger.event.data.action | replace('PRECOM_JA_', '') | int(0) }}"
-    - service: precom.respond_to_alarm
+    - action: precom.respond_to_alarm
       data:
         alarm_id: "{{ alarm_id }}"
         available: true
-    - service: notify.mobile_app_jouw_telefoon
+    - action: notify.mobiel  # <-- aanpassen
       data:
-        message: "✅ Beschikbaarheid doorgegeven aan Pre-Com (alarm #{{ alarm_id }})"
+        message: "✅ Beschikbaarheid bevestigd (alarm #{{ alarm_id }})"
 
 
-# 4. Reageer op "Ik ga niet" knop in de pushmelding
-- id: precom_reactie_nee
-  alias: "Pre-Com: Ik ga niet — niet beschikbaar melden"
+# ---------------------------------------------------------------
+# Naam: auto_reactie_nee
+# Doel: Verwerk de "Kan niet"-knop uit de push-melding.
+# Pre-Com:
+#   - Service: precom.respond_to_alarm
+# ---------------------------------------------------------------
+- id: auto_reactie_nee
+  alias: "Pre-Com: Reactie — Kan niet"
   mode: queued
+  max: 10
   trigger:
     - platform: event
       event_type: mobile_app_notification_action
@@ -98,81 +155,327 @@
   action:
     - variables:
         alarm_id: "{{ trigger.event.data.action | replace('PRECOM_NEE_', '') | int(0) }}"
-    - service: precom.respond_to_alarm
+    - action: precom.respond_to_alarm
       data:
         alarm_id: "{{ alarm_id }}"
         available: false
-    - service: notify.mobile_app_jouw_telefoon
+    - action: notify.mobiel  # <-- aanpassen
       data:
         message: "❌ Niet beschikbaar doorgegeven (alarm #{{ alarm_id }})"
 
 
-# 5. Beschikbaarheid koppelen aan aanwezigheid thuis
-- id: precom_beschikbaar_aanwezigheid
-  alias: "Pre-Com: Beschikbaarheid op basis van aanwezigheid"
-  mode: queued
+# === BESCHIKBAARHEID KOPPELEN AAN EIGEN LEVEN ================================
+
+# ---------------------------------------------------------------
+# Naam: auto_beschikbaar_na_thuiskomst
+# Doel: Automatisch beschikbaar melden zodra je thuis bent.
+# Vereist:
+#   - person.jouw_naam          (pas aan naar eigen persoonsentiteit)
+#   - switch.pre_com_beschikbaar (pas aan naar eigen entity_id)
+# Pre-Com:
+#   - switch.pre_com_beschikbaar
+# Modus: single — her-triggers bij aanwezigheidsflaps worden genegeerd.
+# Toelichting: for: 3 minuten voorkomt flip-back door tracker-jitter.
+# ---------------------------------------------------------------
+- id: auto_beschikbaar_na_thuiskomst
+  alias: "Pre-Com: Beschikbaar na thuiskomst"
+  mode: single
   trigger:
     - platform: state
-      entity_id: person.jouw_naam    # Pas aan
+      entity_id: person.jouw_naam  # <-- aanpassen
+      from: "not_home"
+      to: "home"
+      for: "00:03:00"
   action:
-    - choose:
-        - conditions:
-            - condition: state
-              entity_id: person.jouw_naam
-              state: home
-          sequence:
-            - service: switch.turn_on
-              target:
-                entity_id: switch.pre_com_beschikbaar
-        - conditions:
-            - condition: not
-              conditions:
-                - condition: state
-                  entity_id: person.jouw_naam
-                  state: home
-          sequence:
-            - service: switch.turn_off
-              target:
-                entity_id: switch.pre_com_beschikbaar
+    - action: switch.turn_on
+      target:
+        entity_id: switch.pre_com_beschikbaar  # <-- aanpassen
 
 
-# 6. Automatisch beschikbaar op werkdagen
-- id: precom_beschikbaar_werkdag
-  alias: "Pre-Com: Beschikbaar op werkdagen"
+# ---------------------------------------------------------------
+# Naam: auto_niet_beschikbaar_bij_vertrek
+# Doel: Automatisch niet-beschikbaar melden zodra je het huis verlaat.
+# Vereist:
+#   - person.jouw_naam
+#   - switch.pre_com_beschikbaar
+#   - input_number.precom_niet_beschikbaar_uren  (maak helper aan)
+# Pre-Com:
+#   - switch.pre_com_beschikbaar
+# Modus: single — dubbele triggers bij vertrek zijn normaal, one-shot.
+# ---------------------------------------------------------------
+- id: auto_niet_beschikbaar_bij_vertrek
+  alias: "Pre-Com: Niet beschikbaar bij vertrek"
+  mode: single
+  trigger:
+    - platform: state
+      entity_id: person.jouw_naam  # <-- aanpassen
+      from: "home"
+      to: "not_home"
+      for: "00:03:00"
+  action:
+    - action: switch.turn_off
+      target:
+        entity_id: switch.pre_com_beschikbaar  # <-- aanpassen
+
+
+# ---------------------------------------------------------------
+# Naam: auto_niet_beschikbaar_bij_slapen
+# Doel: Niet-beschikbaar melden wanneer de bedtijd-helper wordt aangezet,
+#       voor een configureerbaar aantal uren (via input_number).
+# Vereist:
+#   - input_boolean.precom_bedtijd     (maak helper aan via Instellingen → Helpers)
+#   - input_number.precom_niet_beschikbaar_uren  (idem, bereik 1–168)
+#   - switch.pre_com_beschikbaar
+# Pre-Com:
+#   - switch.pre_com_beschikbaar
+#   - number.pre_com_niet_beschikbaar_uren
+# Modus: single — één actie per slaapsessie.
+# ---------------------------------------------------------------
+- id: auto_niet_beschikbaar_bij_slapen
+  alias: "Pre-Com: Niet beschikbaar bij bedtijd"
+  mode: single
+  trigger:
+    - platform: state
+      entity_id: input_boolean.precom_bedtijd  # <-- aanpassen of maak helper aan
+      to: "on"
+  action:
+    - action: number.set_value
+      target:
+        entity_id: number.pre_com_niet_beschikbaar_uren  # <-- aanpassen
+      data:
+        value: "{{ states('input_number.precom_niet_beschikbaar_uren') | int(8) }}"
+    - action: switch.turn_off
+      target:
+        entity_id: switch.pre_com_beschikbaar  # <-- aanpassen
+
+
+# ---------------------------------------------------------------
+# Naam: auto_niet_beschikbaar_buiten_regio
+# Doel: Buiten-regio melden wanneer je een bepaalde zone verlaat.
+# Vereist:
+#   - person.jouw_naam
+#   - input_number.precom_niet_beschikbaar_uren
+# Pre-Com:
+#   - Service: precom.set_outside_region
+# Modus: single.
+# ---------------------------------------------------------------
+- id: auto_niet_beschikbaar_buiten_regio
+  alias: "Pre-Com: Buiten regio bij zone-exit"
+  mode: single
+  trigger:
+    - platform: zone
+      entity_id: person.jouw_naam  # <-- aanpassen
+      zone: zone.home
+      event: leave
+  action:
+    - action: precom.set_outside_region
+      data:
+        hours: "{{ states('input_number.precom_niet_beschikbaar_uren') | int(8) }}"
+
+
+# === CAPCODE-BEHEER ==========================================================
+
+# ---------------------------------------------------------------
+# Naam: auto_capcodes_nachtmode
+# Doel: 's Avonds non-urgente capcodes uitschakelen, 's ochtends
+#       weer inschakelen. Schakel de nachtmode handmatig aan/uit
+#       via een input_boolean helper.
+# Vereist:
+#   - input_boolean.precom_nachtmode           (maak helper aan)
+#   - switch.pre_com_capcode_<omschrijving>    (vervang met jouw capcode-switches)
+# Pre-Com:
+#   - Capcode-switches (switch.pre_com_capcode_*)
+# Modus: single — tijdgebaseerde trigger, geen her-trigger nodig.
+# ---------------------------------------------------------------
+- id: auto_capcodes_nachtmode_aan
+  alias: "Pre-Com: Nachtmode capcodes AAN (23:00)"
+  mode: single
+  trigger:
+    - platform: time
+      at: "23:00:00"
+  condition:
+    - condition: state
+      entity_id: input_boolean.precom_nachtmode  # <-- maak helper aan
+      state: "on"
+  action:
+    # Schakel hier alle non-urgente capcodes uit
+    - action: switch.turn_off
+      target:
+        entity_id:
+          - switch.pre_com_capcode_ploeg_b      # <-- aanpassen naar eigen capcodes
+          - switch.pre_com_capcode_ondersteuning # <-- aanpassen
+
+- id: auto_capcodes_nachtmode_uit
+  alias: "Pre-Com: Nachtmode capcodes UIT (07:00)"
   mode: single
   trigger:
     - platform: time
       at: "07:00:00"
-  condition:
-    - condition: time
-      weekday: [mon, tue, wed, thu, fri]
   action:
-    - service: switch.turn_on
+    - action: switch.turn_on
       target:
-        entity_id: switch.pre_com_beschikbaar
+        entity_id:
+          - switch.pre_com_capcode_ploeg_b      # <-- aanpassen
+          - switch.pre_com_capcode_ondersteuning # <-- aanpassen
 
 
-# =============================================================
-# LOVELACE DASHBOARD KAART
-# =============================================================
-# Voeg toe aan je dashboard via de UI of YAML:
-#
-# type: entities
-# title: Pre-Com
-# entities:
-#   - entity: switch.pre_com_beschikbaar
-#     name: Ik ben beschikbaar
-#   - entity: number.pre_com_niet_beschikbaar_uren
-#     name: Niet beschikbaar voor (uur)
-#   - entity: sensor.pre_com_laatste_alarm
-#     name: Laatste alarm
-#   - entity: sensor.pre_com_alarm_aantal
-#     name: Aantal alarmen
-#   - entity: binary_sensor.pre_com_alarm_actief
-#     name: Alarm actief
-#   - entity: binary_sensor.pre_com_beschikbaar
-#     name: Beschikbaarheidsstatus
-#   - entity: sensor.pre_com_volgende_dienst
-#     name: Volgende dienst
-#   - entity: button.pre_com_vernieuwen
-#     name: Data vernieuwen
+# ---------------------------------------------------------------
+# Naam: auto_capcodes_per_dienst
+# Doel: Capcode-combinatie aanpassen op basis van dienststatus.
+#       Gebruik choose voor nette dienst-branching.
+# Vereist:
+#   - input_select.brandweer_dienst  (opties: dag, nacht, vrij — maak aan)
+#   - Capcode-switches (zie boven)
+# Pre-Com:
+#   - Capcode-switches
+# Modus: single.
+# ---------------------------------------------------------------
+- id: auto_capcodes_per_dienst
+  alias: "Pre-Com: Capcodes aanpassen bij dienststatus"
+  mode: single
+  trigger:
+    - platform: state
+      entity_id: input_select.brandweer_dienst  # <-- aanpassen
+  action:
+    - choose:
+        - conditions:
+            - condition: state
+              entity_id: input_select.brandweer_dienst
+              state: "dag"
+          sequence:
+            - action: switch.turn_on
+              target:
+                entity_id: switch.pre_com_capcode_ploeg_a  # <-- aanpassen
+            - action: switch.turn_off
+              target:
+                entity_id: switch.pre_com_capcode_ploeg_b  # <-- aanpassen
+        - conditions:
+            - condition: state
+              entity_id: input_select.brandweer_dienst
+              state: "nacht"
+          sequence:
+            - action: switch.turn_off
+              target:
+                entity_id: switch.pre_com_capcode_ploeg_a  # <-- aanpassen
+            - action: switch.turn_on
+              target:
+                entity_id: switch.pre_com_capcode_ploeg_b  # <-- aanpassen
+      default:
+        # "vrij" of onbekend: alle capcodes uit
+        - action: switch.turn_off
+          target:
+            entity_id:
+              - switch.pre_com_capcode_ploeg_a  # <-- aanpassen
+              - switch.pre_com_capcode_ploeg_b  # <-- aanpassen
+
+
+# === WAARSCHUWINGEN & DIAGNOSTIEK ============================================
+
+# ---------------------------------------------------------------
+# Naam: auto_integratie_offline_waarschuwing
+# Doel: Push-melding sturen als de Pre-Com integratie langer dan
+#       15 minuten geen data kan ophalen.
+# Vereist:
+#   - switch.pre_com_beschikbaar  (als die unavailable wordt, is de integratie down)
+#   - notify.mobiel
+# Pre-Com:
+#   - switch.pre_com_beschikbaar (of een andere Pre-Com entiteit)
+# Modus: single — één melding per outage.
+# ---------------------------------------------------------------
+- id: auto_integratie_offline_waarschuwing
+  alias: "Pre-Com: Waarschuwing — integratie offline"
+  mode: single
+  trigger:
+    - platform: state
+      entity_id: switch.pre_com_beschikbaar  # <-- aanpassen naar eigen entity_id
+      to: "unavailable"
+      for: "00:15:00"
+  action:
+    - action: notify.mobiel  # <-- aanpassen
+      data:
+        title: "⚠️ Pre-Com offline"
+        message: >
+          De Pre-Com integratie geeft al meer dan 15 minuten geen data.
+          Controleer je internet, de Pre-Com server of herstart Home Assistant.
+
+
+# ---------------------------------------------------------------
+# Naam: auto_beschikbaarheid_gesynchroniseerd
+# Doel: Logbook-melding + push als de beschikbaarheidsstatus via de
+#       Pre-Com app is gewijzigd terwijl HA een andere status had.
+#       Handig voor gebruikers die zowel de app als HA gebruiken.
+# Vereist:
+#   - binary_sensor.pre_com_beschikbaar
+#   - notify.mobiel (optioneel)
+# Pre-Com:
+#   - binary_sensor.pre_com_beschikbaar (leest server-truth)
+# Modus: single.
+# ---------------------------------------------------------------
+- id: auto_beschikbaarheid_gesynchroniseerd
+  alias: "Pre-Com: Beschikbaarheidsstatus gesynchroniseerd"
+  mode: single
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.pre_com_beschikbaar  # <-- aanpassen
+  condition:
+    # Alleen reageren als de staat echt veranderd is (niet unavailable → known)
+    - condition: template
+      value_template: >
+        {{ trigger.from_state.state in ['on', 'off'] and
+           trigger.to_state.state in ['on', 'off'] }}
+  action:
+    - action: logbook.log
+      data:
+        name: "Pre-Com"
+        message: >
+          Beschikbaarheidsstatus gewijzigd naar
+          {{ 'beschikbaar' if trigger.to_state.state == 'on' else 'niet beschikbaar' }}
+          (bron: {{ trigger.to_state.attributes.get('bron', 'onbekend') }})
+        entity_id: binary_sensor.pre_com_beschikbaar  # <-- aanpassen
+
+
+# === GEAVANCEERD: AGENDA-KOPPELING ===========================================
+
+# ---------------------------------------------------------------
+# Naam: auto_beschikbaarheid_via_agenda
+# Doel: Automatisch niet-beschikbaar melden bij een kalender-event
+#       met een specifiek trefwoord (bv. "opleiding" of "oppassen").
+# Vereist:
+#   - calendar.persoonlijk      (pas aan naar jouw kalender)
+#   - switch.pre_com_beschikbaar
+#   - number.pre_com_niet_beschikbaar_uren
+# Pre-Com:
+#   - switch.pre_com_beschikbaar
+#   - number.pre_com_niet_beschikbaar_uren
+# Modus: queued — meerdere events op dezelfde dag zijn mogelijk.
+# Toelichting: calendar-trigger geeft event.duration in minuten.
+# ---------------------------------------------------------------
+- id: auto_beschikbaarheid_via_agenda
+  alias: "Pre-Com: Niet beschikbaar via agenda-event"
+  mode: queued
+  max: 5
+  trigger:
+    - platform: calendar
+      event: start
+      entity_id: calendar.persoonlijk  # <-- aanpassen
+      offset: "00:05:00"  # 5 min voor aanvang
+  condition:
+    # Alleen events met specifieke trefwoorden
+    - condition: template
+      value_template: >
+        {{ trigger.calendar_event.summary | lower |
+           regex_search('opleiding|oppassen|vakantie') }}
+  action:
+    - variables:
+        duur_uren: >
+          {{ ((trigger.calendar_event.end | as_datetime -
+               trigger.calendar_event.start | as_datetime).total_seconds() / 3600)
+             | round(0) | int }}
+    - action: number.set_value
+      target:
+        entity_id: number.pre_com_niet_beschikbaar_uren  # <-- aanpassen
+      data:
+        value: "{{ [duur_uren, 1] | max }}"
+    - action: switch.turn_off
+      target:
+        entity_id: switch.pre_com_beschikbaar  # <-- aanpassen
