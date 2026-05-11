@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 
@@ -102,7 +102,7 @@ class PreComClient:
                 if not token:
                     raise PreComAuthError("Lege tokenrespons ontvangen")
                 self._access_token = token
-                self._token_expires = datetime.utcnow() + timedelta(seconds=3540)
+                self._token_expires = datetime.now(timezone.utc) + timedelta(seconds=3540)
                 _LOGGER.info("Pre-Com: authenticatie geslaagd (%d tekens)", len(token))
         except aiohttp.ClientError as err:
             raise PreComApiError(f"Verbindingsfout bij authenticatie: {err}") from err
@@ -110,7 +110,7 @@ class PreComClient:
     async def _ensure_token(self) -> None:
         """Vernieuw het token als het ontbreekt of verlopen is."""
         if self._access_token is None or (
-            self._token_expires and datetime.utcnow() >= self._token_expires
+            self._token_expires and datetime.now(timezone.utc) >= self._token_expires
         ):
             await self.authenticate()
 
